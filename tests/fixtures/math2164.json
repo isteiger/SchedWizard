@@ -1,0 +1,15 @@
+[
+  {"id":332260,"term":"202710","courseReferenceNumber":"20429","partOfTerm":"1","courseNumber":"2164","subject":"MATH","sequenceNumber":"001","campusDescription":"Main Campus or Dubois Campus","scheduleTypeDescription":"Lecture","courseTitle":"Matrices &amp; Linear Algebra","creditHours":null,"creditHourLow":3,"creditHourHigh":null,"maximumEnrollment":60,"enrollment":0,"seatsAvailable":60,"waitCapacity":0,"waitCount":0,"waitAvailable":0,"openSection":true,"linkIdentifier":null,"isSectionLinked":false,"subjectCourse":"MATH2164",
+   "faculty":[{"displayName":"Alan Dow","emailAddress":"adow@uncc.edu","primaryIndicator":true}],
+   "meetingsFaculty":[
+     {"meetingTime":{"beginTime":"0800","endTime":"0850","building":"FRET","buildingDescription":"Fretwell","room":"126","startDate":"01/11/2027","endDate":"05/06/2027","monday":true,"tuesday":false,"wednesday":true,"thursday":false,"friday":true,"saturday":false,"sunday":false,"meetingTypeDescription":"Class","hoursWeek":2.5}},
+     {"meetingTime":{"beginTime":"0800","endTime":"1050","building":"FRET","buildingDescription":"Fretwell","room":"126","startDate":"05/10/2027","endDate":"05/10/2027","monday":true,"tuesday":false,"wednesday":false,"thursday":false,"friday":false,"saturday":false,"sunday":false,"meetingTypeDescription":"Final Exam","hoursWeek":0}}
+   ],
+   "instructionalMethod":"TR","instructionalMethodDescription":"Face-to-Face Instruction"},
+  {"id":332261,"term":"202710","courseReferenceNumber":"20430","partOfTerm":"1","courseNumber":"2164","subject":"MATH","sequenceNumber":"090","campusDescription":"Distance Education","scheduleTypeDescription":"Lecture","courseTitle":"Matrices &amp; Linear Algebra","creditHours":null,"creditHourLow":3,"creditHourHigh":null,"maximumEnrollment":30,"enrollment":30,"seatsAvailable":0,"waitCapacity":5,"waitCount":1,"waitAvailable":4,"openSection":false,"linkIdentifier":null,"isSectionLinked":false,"subjectCourse":"MATH2164",
+   "faculty":[],
+   "meetingsFaculty":[
+     {"meetingTime":{"beginTime":null,"endTime":null,"building":null,"buildingDescription":null,"room":null,"startDate":"01/11/2027","endDate":"05/06/2027","monday":false,"tuesday":false,"wednesday":false,"thursday":false,"friday":false,"saturday":false,"sunday":false,"meetingTypeDescription":"Class","hoursWeek":0}}
+   ],
+   "instructionalMethod":"OL","instructionalMethodDescription":"Online Asynchronous"}
+]

@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Niner Schedule Wizard",
+  "version": "1.0.0",
+  "description": "Generate conflict-free class schedules for UNC Charlotte's Banner 9 registration and save them as a plan.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://selfservice.uncc.edu/*"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "Niner Schedule Wizard",
+    "default_icon": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" }
+  },
+  "icons": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
+  "content_scripts": [
+    {
+      "matches": ["https://selfservice.uncc.edu/StudentRegistrationSsb/*"],
+      "js": ["src/api.js", "src/solver.js", "src/ui/app.js", "src/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/ui/styles.css"],
+      "matches": ["https://selfservice.uncc.edu/*"]
+    }
+  ]
+}
