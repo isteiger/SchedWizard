@@ -111,7 +111,7 @@ test('sorting: compact, fewestDays, latestStart, earliestEnd, mostSeats', () => 
   assert.strictEqual(order('mostSeats')[0], 'gap');
   const best = gen([x, y], { sort: 'compact' }).schedules[0];
   assert.deepStrictEqual(best.stats, {
-    days: 2, totalGapMinutes: 4, earliestStart: 600, latestEnd: 720, credits: 6, minSeats: 3,
+    days: 2, totalGapMinutes: 4, earliestStart: 600, latestEnd: 720, credits: 6, minSeats: 3, avgProfRating: null,
   });
 });
 
@@ -209,6 +209,20 @@ test('performance: 7 courses x 30 sections under 1500ms', () => {
   const ms = Date.now() - t0;
   console.log(`  (perf: ${r.total} schedules, truncated=${r.truncated}, ${ms}ms)`);
   assert.ok(ms < 1500, `took ${ms}ms`);
+});
+
+test('bestProfs sort orders by mean professor rating; unrated count as 3.0', () => {
+  const a1 = sec('A 1', [mt([1], 600, 650)], { profRating: 2.0 });
+  const a2 = sec('A 1', [mt([2], 600, 650)], { profRating: 4.8 });
+  const a3 = sec('A 1', [mt([3], 600, 650)]); // unrated -> 3.0
+  const b1 = sec('B 1', [mt([4], 600, 650)], { profRating: 4.0 });
+  const r = gen([course('A 1', [a1, a2, a3]), course('B 1', [b1])], { sort: 'bestProfs' });
+  assert.strictEqual(r.total, 3);
+  assert.deepStrictEqual(r.schedules.map((s) => s.sections[0].crn), [a2.crn, a3.crn, a1.crn]);
+  assert.ok(Math.abs(r.schedules[0].stats.avgProfRating - 4.4) < 1e-9);
+  assert.strictEqual(r.schedules[1].stats.avgProfRating, 4.0); // only known ratings averaged
+  const none = gen([course('A 1', [sec('A 1', [mt([1], 600, 650)])])]);
+  assert.strictEqual(none.schedules[0].stats.avgProfRating, null);
 });
 
 // ---------- runner ----------

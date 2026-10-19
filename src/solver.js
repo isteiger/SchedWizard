@@ -104,7 +104,10 @@
     let latestEnd = -Infinity;
     let minSeats = Infinity;
     const creditsByCourse = new Map();
+    let ratingSum = 0;
+    let ratingN = 0;
     for (const s of sections) {
+      if (typeof s.profRating === 'number' && isFinite(s.profRating)) { ratingSum += s.profRating; ratingN++; }
       minSeats = Math.min(minSeats, s.seats);
       creditsByCourse.set(s.courseKey, Math.max(creditsByCourse.get(s.courseKey) || 0, s.credits || 0));
       for (const mt of s.meetings) {
@@ -139,6 +142,7 @@
         latestEnd: days ? latestEnd : 0,
         credits,
         minSeats: minSeats === Infinity ? 0 : minSeats,
+        avgProfRating: ratingN ? ratingSum / ratingN : null,
       },
       avgStart: days ? startSum / days : 0,
       avgEnd: days ? endSum / days : 0,
@@ -156,6 +160,13 @@
       case 'latestStart': score = -avgStart; break;
       case 'earliestEnd': score = avgEnd; break;
       case 'mostSeats': score = -stats.minSeats; break;
+      case 'bestProfs': {
+        // Sections without a rating count as a neutral 3.0.
+        let sum = 0;
+        for (const s of sections) sum += typeof s.profRating === 'number' && isFinite(s.profRating) ? s.profRating : 3.0;
+        score = -(sections.length ? sum / sections.length : 3.0);
+        break;
+      }
       default: score = compact;
     }
     return { sections, score, stats, compact };

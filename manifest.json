@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Generate conflict-free class schedules for UNC Charlotte's Banner 9 registration and save them as a plan.",
   "permissions": ["storage"],
-  "host_permissions": ["https://selfservice.uncc.edu/*"],
+  "host_permissions": ["https://selfservice.uncc.edu/*", "https://www.ratemyprofessors.com/*"],
   "background": { "service_worker": "background.js" },
   "action": {
     "default_title": "Niner Schedule Wizard",

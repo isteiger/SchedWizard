@@ -14,6 +14,7 @@
     ['latestStart', 'Latest start'],
     ['earliestEnd', 'Earliest finish'],
     ['mostSeats', 'Most open seats'],
+    ['bestProfs', 'Best-rated professors'],
   ];
   const STORAGE_KEY = 'sw_state_v1';
   const PLANS_URL = '/StudentRegistrationSsb/ssb/plan/selectPlan';
@@ -87,6 +88,21 @@
     return locs.join('; ') || (sec.online ? sec.method || 'Online' : '—');
   }
   function profLabel(sec) { return sec.instructors && sec.instructors.length ? sec.instructors.join(' / ') : 'TBA'; }
+  // Primary (first) instructor used for RateMyProfessors lookups; null for TBA/empty.
+  function cleanProfName(n) {
+    const t = String(n == null ? '' : n).trim();
+    return !t || /^tba$/i.test(t) ? null : t;
+  }
+  function primaryProf(sec) {
+    return sec && sec.instructors && sec.instructors.length ? cleanProfName(sec.instructors[0]) : null;
+  }
+  function primaryOfKey(key) { return cleanProfName(String(key || '').split(' / ')[0]); }
+  function rmpColor(r) { return r >= 4.0 ? '#2E7D32' : r >= 3.0 ? '#C98A00' : '#B3261E'; }
+  function monthYear(d) {
+    const t = d ? new Date(String(d).replace(' ', 'T')) : null;
+    if (!t || isNaN(t.getTime())) return null;
+    return ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][t.getMonth()] + ' ' + t.getFullYear();
+  }
   function normalizeCourseKey(raw) {
     const m = /^\s*([A-Za-z]{2,5})[\s\-_]*([0-9]{3,4}[A-Za-z]?)\s*$/.exec(raw || '');
     return m ? m[1].toUpperCase() + ' ' + m[2].toUpperCase() : null;
@@ -98,7 +114,7 @@
   // ---------------------------------------------------------------- mount
   function mount(shadow, host, cssText) {
     // ---- state
-    const defaultOptions = () => ({ earliest: null, latest: null, daysOff: [], allowFull: false, sort: 'compact' });
+    const defaultOptions = () => ({ earliest: null, latest: null, daysOff: [], allowFull: false, sort: 'compact', minRating: null, allowUnrated: true });
     const S = {
       open: false,
       initialized: false,
@@ -118,9 +134,11 @@
       courseInput: '',
       openCourses: {},
       openProfs: {},
+      sortProfs: true,        // sort professors by RMP rating in step 4
       generating: false,
       result: null,           // {schedules,total,truncated,errors}
       selIdx: 0,
+      rmp: {},                // prof name -> RmpInfo | null | 'loading'
       modal: null,            // {name, running, lines, done, ok, messages, failed}
     };
 
@@ -201,13 +219,101 @@
         handleApiError(e);
         S.cache[id] = { status: 'error', sections: [], title: '', error: errMsg(e) };
       }
-      if (S.term === term) { S.result = null; render(); }
+      if (S.term === term) { S.result = null; render(); if (!batching) requestRmp(); }
     }
+    let batching = false;
     async function fetchAllCourses() {
       const list = S.courses.slice();
-      for (const key of list) {
-        if (S.term && S.courses.indexOf(key) >= 0) await fetchCourse(key);
+      batching = true;
+      try {
+        for (const key of list) {
+          if (S.term && S.courses.indexOf(key) >= 0) await fetchCourse(key);
+        }
+      } finally { batching = false; }
+      requestRmp();
+    }
+
+    // ---- RateMyProfessors
+    function rmpInfoFor(name) {
+      const v = name ? S.rmp[name] : null;
+      return v && typeof v === 'object' && v.numRatings > 0 && isFinite(v.avgRating) ? v : null;
+    }
+    function ratingOf(name) { const i = rmpInfoFor(name); return i ? i.avgRating : null; }
+    function requestRmp() {
+      const names = [];
+      Object.keys(S.cache).forEach((id) => {
+        const c = S.cache[id];
+        if (!c || c.status !== 'ok') return;
+        c.sections.forEach((sec) => {
+          const n = primaryProf(sec);
+          if (n && S.rmp[n] === undefined && names.indexOf(n) < 0) names.push(n);
+        });
+      });
+      if (!names.length) return;
+      names.forEach((n) => { S.rmp[n] = 'loading'; });
+      render();
+      const done = (results) => {
+        names.forEach((n) => {
+          const v = results && results[n];
+          S.rmp[n] = v && typeof v === 'object' ? v : null;
+        });
+        render();
+      };
+      try {
+        chrome.runtime.sendMessage({ type: 'SW_RMP', names }, (resp) => {
+          void (chrome.runtime && chrome.runtime.lastError);
+          done(resp && resp.results);
+        });
+      } catch (e) { done(null); }
+    }
+    let tipEl = null, tipTimer = null;
+    function hideTip() { clearTimeout(tipTimer); if (tipEl) { tipEl.remove(); tipEl = null; } }
+    function showTip(anchor, name, info) {
+      clearTimeout(tipTimer);
+      hideTip();
+      const stat = (label, val) => h('div', { class: 'rmp-stat' }, h('span', null, label), h('strong', null, val));
+      const last = monthYear(info.lastRatingDate);
+      const card = h('div', { class: 'rmp-tip', role: 'tooltip' },
+        h('div', { class: 'rmp-tip-name' }, (info.firstName || '') + ' ' + (info.lastName || '')),
+        h('div', { class: 'rmp-tip-big', style: { color: rmpColor(info.avgRating) } }, info.avgRating.toFixed(1), h('span', null, ' / 5')),
+        stat('Difficulty', isFinite(info.avgDifficulty) ? info.avgDifficulty.toFixed(1) + ' / 5' : 'N/A'),
+        stat('Would take again', info.wouldTakeAgainPercent >= 0 ? Math.round(info.wouldTakeAgainPercent) + '%' : 'N/A'),
+        stat('Ratings', String(info.numRatings)),
+        info.department ? stat('Department', info.department) : null,
+        last ? stat('Last review', last) : null,
+        info.numRatings < 10 ? h('div', { class: 'rmp-warn' }, '\u26A0 low rating count') : null,
+        h('a', { class: 'rmp-link', href: info.url, target: '_blank', rel: 'noopener' }, 'View on RateMyProfessors \u2197'));
+      card.addEventListener('mouseenter', () => clearTimeout(tipTimer));
+      card.addEventListener('mouseleave', () => { tipTimer = setTimeout(hideTip, 150); });
+      card.style.visibility = 'hidden';
+      panelWrap.appendChild(card);
+      tipEl = card;
+      const r = anchor.getBoundingClientRect();
+      const w = card.offsetWidth, hh = card.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
+      const left = Math.min(Math.max(8, r.left), vw - w - 8);
+      let top = r.bottom + 6;
+      if (top + hh > vh - 8) top = Math.max(8, r.top - hh - 6);
+      card.style.left = left + 'px'; card.style.top = top + 'px'; card.style.visibility = '';
+    }
+    // Reusable rating pill. compact=true renders "\u2605" + rating and nothing when no data.
+    function rmpBadge(name, compact) {
+      const n = cleanProfName(name);
+      if (!n) return null;
+      const v = S.rmp[n];
+      if (v === 'loading' || v === undefined) {
+        return compact ? null : h('span', { class: 'rmp-pill loading', title: 'Loading RateMyProfessors rating\u2026' }, '\u2026');
       }
+      const info = rmpInfoFor(n);
+      if (!info) return compact ? null : h('span', { class: 'rmp-pill na', title: 'No RateMyProfessors data' }, 'N/A');
+      const a = h('a', {
+        class: 'rmp-pill' + (compact ? ' compact' : ''), href: info.url, target: '_blank', rel: 'noopener',
+        style: { background: rmpColor(info.avgRating) },
+        'aria-label': n + ' RateMyProfessors rating ' + info.avgRating.toFixed(1),
+        onclick: (e) => e.stopPropagation(),
+        onmouseenter: () => showTip(a, n, info),
+        onmouseleave: () => { tipTimer = setTimeout(hideTip, 150); },
+      }, compact ? '\u2605' + info.avgRating.toFixed(1) : info.avgRating.toFixed(1));
+      return a;
     }
     function termDesc(code) {
       const t = S.terms.find((x) => x.code === code);
@@ -278,6 +384,7 @@
       const panel = h('div', { class: 'panel', role: 'dialog', 'aria-label': 'Niner Schedule Wizard' },
         renderHeader(), renderTabs(), renderBanner(), renderBody(), S.step < 4 && S.initialized ? renderFooter() : null,
         S.modal ? renderModal() : null);
+      tipEl = null;
       panelWrap.textContent = '';
       panelWrap.appendChild(panel);
 
@@ -458,7 +565,21 @@
           h('div', { class: 'field' }, h('label', { class: 'check' },
             h('input', { type: 'checkbox', checked: !!o.allowFull, onchange: (e) => { o.allowFull = e.target.checked; changed(); } }),
             h('span', null, 'Include full sections (no seats available)'))),
+          h('div', { class: 'field' }, h('label', null, 'Minimum professor rating (RateMyProfessors)'),
+            minRatingSelect(),
+            h('label', { class: 'check', style: { marginTop: '6px' } },
+              h('input', { type: 'checkbox', checked: o.allowUnrated !== false, onchange: (e) => { o.allowUnrated = e.target.checked; changed(); } }),
+              h('span', null, 'Also allow unrated professors (and TBA)'))),
           h('div', { class: 'field' }, h('label', null, 'Sort schedules by'), sortSelect())));
+    }
+    function minRatingSelect() {
+      const cur = S.options.minRating == null ? '' : String(S.options.minRating);
+      const sel = h('select', { class: 'input', 'data-focus': 'minrating',
+        onchange: (e) => { S.options.minRating = e.target.value === '' ? null : parseFloat(e.target.value); changed(); render(); } },
+      [['', 'Any'], ['2.5', '2.5+'], ['3', '3.0+'], ['3.5', '3.5+'], ['4', '4.0+']].map(([v, l]) =>
+        h('option', { value: v, selected: cur === v }, l)));
+      sel.value = cur;
+      return sel;
     }
     function sortSelect() {
       const sel = h('select', { class: 'input', 'data-focus': 'sort', onchange: (e) => { S.options.sort = e.target.value; changed(); render(); } },
@@ -475,7 +596,19 @@
         if (!map.has(k)) map.set(k, []);
         map.get(k).push(s);
       });
-      return Array.from(map.entries()).map(([name, secs]) => ({ name, secs }));
+      const groups = Array.from(map.entries()).map(([name, secs]) => ({ name, secs }));
+      if (S.sortProfs) {
+        const rk = (g) => ratingOf(primaryOfKey(g.name));
+        groups.forEach((g, i) => { g.i = i; });
+        groups.sort((a, b) => {
+          const ra = rk(a), rb = rk(b);
+          if (ra == null && rb == null) return a.i - b.i;
+          if (ra == null) return 1;
+          if (rb == null) return -1;
+          return rb - ra || a.i - b.i;
+        });
+      }
+      return groups;
     }
     function setSections(secs, on) {
       secs.forEach((s) => { if (on) delete S.deselected[s.crn]; else S.deselected[s.crn] = true; });
@@ -498,7 +631,10 @@
             h('div', { class: 'row wrap acc-tools' },
               h('button', { class: 'btn small', type: 'button', onclick: () => setSections(ci.sections, true) }, 'Select all'),
               h('button', { class: 'btn small', type: 'button', onclick: () => setSections(ci.sections, false) }, 'Select none'),
-              h('button', { class: 'btn small', type: 'button', onclick: () => { ci.sections.forEach((s) => { if (isFull(s)) S.deselected[s.crn] = true; else delete S.deselected[s.crn]; }); changed(); render(); } }, 'Skip full')),
+              h('button', { class: 'btn small', type: 'button', onclick: () => { ci.sections.forEach((s) => { if (isFull(s)) S.deselected[s.crn] = true; else delete S.deselected[s.crn]; }); changed(); render(); } }, 'Skip full'),
+              h('label', { class: 'check small push-right' },
+                h('input', { type: 'checkbox', checked: S.sortProfs, onchange: (e) => { S.sortProfs = e.target.checked; render(); } }),
+                h('span', null, 'Sort profs by rating'))),
             groups.map((g) => renderProfGroup(key, g))));
         }
         return el;
@@ -516,7 +652,9 @@
       });
       const wrap = h('div', { class: 'prof' },
         h('div', { class: 'prof-head' },
-          h('label', { class: 'check grow' }, cb, h('span', { class: 'prof-name' }, g.name)),
+          h('label', { class: 'check' }, cb, h('span', { class: 'prof-name' }, g.name)),
+          rmpBadge(primaryOfKey(g.name)),
+          h('span', { class: 'grow' }),
           h('span', { class: 'muted small' }, g.secs.length + (g.secs.length === 1 ? ' section' : ' sections') + ' · ' + seats + '/' + cap + ' seats open'),
           h('button', { class: 'link-btn', type: 'button', onclick: () => { S.openProfs[gid] = !open; render(); } }, open ? 'Hide sections' : 'Show sections')));
       if (open) {
@@ -537,8 +675,16 @@
 
     // ---- step 5: schedules
     function buildInput() {
-      const courses = loadedCourses().map(({ key }) => ({ key, sections: selectedSections(key) }));
       const o = S.options;
+      const courses = loadedCourses().map(({ key }) => ({
+        key,
+        sections: selectedSections(key).filter((sec) => {
+          const r = ratingOf(primaryProf(sec));
+          sec.profRating = r;
+          if (o.minRating == null) return true;
+          return r == null ? o.allowUnrated !== false : r >= o.minRating;
+        }),
+      }));
       return {
         courses,
         breaks: S.breaks.filter((b) => b.start != null && b.end != null && b.end > b.start && b.days.length)
@@ -551,7 +697,7 @@
       const input = buildInput();
       const empty = input.courses.filter((c) => !c.sections.length).map((c) => c.key);
       if (empty.length) {
-        S.result = { schedules: [], total: 0, truncated: false, errors: ['No sections selected for ' + empty.join(', ') + '. Go back to "Sections & Professors".'] };
+        S.result = { schedules: [], total: 0, truncated: false, errors: ['No sections selected for ' + empty.join(', ') + '. Go back to "Sections & Professors"' + (S.options.minRating != null ? ' or loosen the minimum professor rating.' : '.')] };
         render(); return;
       }
       S.generating = true; S.result = null; render();
@@ -611,7 +757,8 @@
           miniWeek(sch, colors),
           h('div', { class: 'sc-stats muted small' },
             h('span', null, ((st.totalGapMinutes || 0) / 60).toFixed(1) + ' h gaps'), h('span', null, (st.credits != null ? st.credits : 0) + ' cr'),
-            h('span', null, 'min ' + (st.minSeats != null && isFinite(st.minSeats) ? st.minSeats : '—') + ' seats')));
+            h('span', null, 'min ' + (st.minSeats != null && isFinite(st.minSeats) ? st.minSeats : '—') + ' seats'),
+            st.avgProfRating != null ? h('span', null, 'avg prof \u2605' + st.avgProfRating.toFixed(1)) : null));
       }));
     }
     function miniWeek(sch, colors) {
@@ -695,7 +842,7 @@
               h('span', { class: 'cb-t' }, sec.courseKey + (sec.scheduleType && sec.scheduleType !== 'Lecture' ? ' ' + sec.scheduleType : '')),
               h('span', { class: 'cb-s' }, minLabel(it.s) + '–' + minLabel(it.e)),
               h('span', { class: 'cb-s' }, 'Sec ' + sec.section + (it.m.location ? ' · ' + it.m.location : '')),
-              h('span', { class: 'cb-s' }, profLabel(sec))));
+              h('span', { class: 'cb-s' }, profLabel(sec), ' ', rmpBadge(primaryProf(sec), true))));
           }
         });
         return h('div', { class: 'cal-daycol' }, h('div', { class: 'cal-dayhead' }, DAY_NAMES[num].slice(0, 3)), col);
@@ -714,7 +861,7 @@
     function renderTable(sch, colors) {
       const rows = sch.sections.map((s) => h('tr', null,
         h('td', null, h('span', { class: 'swatch', style: { background: colors[s.courseKey] || PALETTE[0] } }), h('strong', null, s.courseKey), h('div', { class: 'muted small' }, s.title)),
-        h('td', null, s.section), h('td', null, s.crn), h('td', null, profLabel(s)), h('td', null, sectionTimes(s)), h('td', null, sectionLocation(s)),
+        h('td', null, s.section), h('td', null, s.crn), h('td', null, profLabel(s), ' ', rmpBadge(primaryProf(s))), h('td', null, sectionTimes(s)), h('td', null, sectionLocation(s)),
         h('td', null, Math.max(0, s.seats) + '/' + s.capacity)));
       return h('div', { class: 'table-wrap' }, h('table', { class: 'tbl' },
         h('thead', null, h('tr', null, ['Course', 'Sec', 'CRN', 'Instructor', 'Times', 'Location', 'Seats'].map((t) => h('th', null, t)))),

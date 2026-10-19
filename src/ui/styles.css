@@ -262,3 +262,31 @@ input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--green); cu
   .tab { padding: 10px 10px; }
   .tab-name { font-size: 12px; }
 }
+
+/* ---------- RateMyProfessors */
+.grow { flex: 1; min-width: 0; }
+.push-right { margin-left: auto; }
+.rmp-pill {
+  display: inline-block; min-width: 34px; padding: 1px 8px; border-radius: 999px; background: #888; color: #fff !important;
+  font-size: 12px; font-weight: 700; line-height: 18px; text-align: center; text-decoration: none; cursor: pointer; vertical-align: middle;
+}
+.rmp-pill:hover { filter: brightness(1.1); }
+.rmp-pill.compact { min-width: 0; padding: 0 5px; font-size: 10px; line-height: 14px; background-color: rgba(0, 0, 0, .35); border: 1px solid rgba(255, 255, 255, .6); }
+.rmp-pill.na { background: #9AA39E; cursor: default; }
+.rmp-pill.loading {
+  cursor: default; color: transparent !important; min-width: 40px;
+  background: linear-gradient(90deg, #e4e2da 25%, #f3f1ea 50%, #e4e2da 75%); background-size: 200% 100%; animation: rmp-shimmer 1.2s linear infinite;
+}
+@keyframes rmp-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.rmp-tip {
+  position: fixed; z-index: 2147483600; width: 230px; padding: 12px 14px; background: #fff; color: var(--text);
+  border: 1px solid var(--border); border-top: 4px solid var(--gold); border-radius: 10px; box-shadow: 0 8px 28px rgba(0, 0, 0, .28);
+  font-size: 12px;
+}
+.rmp-tip-name { font-weight: 800; font-size: 14px; color: var(--green); }
+.rmp-tip-big { font-size: 32px; font-weight: 900; line-height: 1.1; margin: 2px 0 6px; }
+.rmp-tip-big span { font-size: 14px; font-weight: 600; color: var(--muted); }
+.rmp-stat { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+.rmp-stat span { color: var(--muted); }
+.rmp-warn { margin-top: 6px; padding: 4px 8px; background: #FFF6DC; color: #7a5b00; border-radius: 6px; font-weight: 600; }
+.rmp-link { display: block; margin-top: 8px; color: var(--green); font-weight: 700; }
