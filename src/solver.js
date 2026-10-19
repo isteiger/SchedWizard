@@ -21,6 +21,31 @@
     return DAY_ORDER.filter((d) => set.has(d)).map((d) => DAY_LETTERS[d]).join('');
   }
 
+  // ---------- modality ----------
+
+  const HYBRID_RE = /hybrid|blended/i;
+  const ONLINE_RE = /online|distance|remote/i;
+  function isHybrid(sec) { return !!sec && HYBRID_RE.test(sec.method || ''); }
+  // Online = flagged online (no meeting times) or an online/distance/remote method, and not hybrid.
+  function isOnline(sec) {
+    if (!sec || isHybrid(sec)) return false;
+    return !!sec.online || ONLINE_RE.test(sec.method || '');
+  }
+  // 'online' | 'hybrid' | 'inperson'
+  function modalityOf(sec) { return isHybrid(sec) ? 'hybrid' : isOnline(sec) ? 'online' : 'inperson'; }
+  // 1000 per non-preferred section, 500 per hybrid.
+  function modalityPenalty(sections, modality) {
+    if (modality !== 'preferOnline' && modality !== 'preferInPerson') return 0;
+    const want = modality === 'preferOnline' ? 'online' : 'inperson';
+    let p = 0;
+    for (const s of sections) {
+      const m = modalityOf(s);
+      if (m === want) continue;
+      p += m === 'hybrid' ? 500 : 1000;
+    }
+    return p;
+  }
+
   // ---------- conflicts ----------
 
   function datesOverlap(a, b) {
@@ -106,8 +131,10 @@
     const creditsByCourse = new Map();
     let ratingSum = 0;
     let ratingN = 0;
+    let onlineCount = 0;
     for (const s of sections) {
       if (typeof s.profRating === 'number' && isFinite(s.profRating)) { ratingSum += s.profRating; ratingN++; }
+      if (isOnline(s)) onlineCount++;
       minSeats = Math.min(minSeats, s.seats);
       creditsByCourse.set(s.courseKey, Math.max(creditsByCourse.get(s.courseKey) || 0, s.credits || 0));
       for (const mt of s.meetings) {
@@ -143,6 +170,7 @@
         credits,
         minSeats: minSeats === Infinity ? 0 : minSeats,
         avgProfRating: ratingN ? ratingSum / ratingN : null,
+        onlineCount,
       },
       avgStart: days ? startSum / days : 0,
       avgEnd: days ? endSum / days : 0,
@@ -151,7 +179,7 @@
 
   function compactScore(st) { return st.totalGapMinutes + 30 * st.days; }
 
-  function scoreSchedule(sections, sort) {
+  function scoreSchedule(sections, sort, modality) {
     const { stats, avgStart, avgEnd } = computeStats(sections);
     const compact = compactScore(stats);
     let score;
@@ -169,6 +197,7 @@
       }
       default: score = compact;
     }
+    score += modalityPenalty(sections, modality);
     return { sections, score, stats, compact };
   }
 
@@ -245,12 +274,12 @@
 
     dfs(0, occ0);
 
-    const scored = found.map((secs) => scoreSchedule(secs, opts.sort));
+    const scored = found.map((secs) => scoreSchedule(secs, opts.sort, opts.modality));
     scored.sort((a, b) => a.score - b.score || a.compact - b.compact);
     const top = scored.slice(0, opts.maxResults).map(({ sections, score, stats }) => ({ sections, score, stats }));
     return { schedules: top, total: found.length, truncated, errors: [] };
   }
 
-  SW.solver = { generate, conflicts, sectionFits, scoreSchedule, buildComponents, minutesToLabel, daysToLabel };
+  SW.solver = { isOnline, isHybrid, modalityOf, modalityPenalty, generate, conflicts, sectionFits, scoreSchedule, buildComponents, minutesToLabel, daysToLabel };
   if (typeof module !== 'undefined' && module.exports) module.exports = SW.solver;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

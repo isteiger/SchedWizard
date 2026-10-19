@@ -168,7 +168,7 @@ input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--green); cu
 .prof-name { font-weight: 700; }
 .sec-table { display: flex; flex-direction: column; }
 .sec-row {
-  display: grid; grid-template-columns: 22px 44px 60px 90px minmax(160px, 1.4fr) minmax(90px, 1fr) 110px minmax(80px, 1fr);
+  display: grid; grid-template-columns: 22px 44px 60px 90px minmax(160px, 1.4fr) minmax(90px, 1fr) 110px minmax(80px, 1fr) auto;
   gap: 10px; align-items: center; padding: 7px 12px; border-top: 1px solid var(--border); cursor: pointer; font-size: 13px;
 }
 .sec-row:hover { background: #fafaf7; }
@@ -176,7 +176,7 @@ input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--green); cu
 .sec-num { font-weight: 800; }
 .sec-seats { white-space: nowrap; }
 @media (max-width: 1100px) {
-  .sec-row { grid-template-columns: 22px 40px 56px minmax(140px, 1.6fr) minmax(80px, 1fr) 96px; }
+  .sec-row { grid-template-columns: 22px 40px 56px minmax(140px, 1.6fr) minmax(80px, 1fr) 96px auto; }
   .sec-type, .sec-method { display: none; }
 }
 
@@ -290,3 +290,33 @@ input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--green); cu
 .rmp-stat span { color: var(--muted); }
 .rmp-warn { margin-top: 6px; padding: 4px 8px; background: #FFF6DC; color: #7a5b00; border-radius: 6px; font-weight: 600; }
 .rmp-link { display: block; margin-top: 8px; color: var(--green); font-weight: 700; }
+
+/* ---------- plans strip */
+.plans-strip { flex: none; background: #fff; border-bottom: 1px solid var(--border); padding: 8px 20px; }
+.plans-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.plans-toggle { background: none; border: 0; padding: 0; cursor: pointer; font-weight: 800; color: var(--green); font-size: 14px; display: flex; align-items: center; gap: 6px; }
+.plans-head a { color: var(--green); font-size: 12px; font-weight: 600; }
+.plans-list { display: flex; gap: 10px; overflow-x: auto; padding: 8px 2px 4px; }
+.plan-card {
+  flex: none; width: 230px; text-align: left; background: var(--bg); border: 1.5px solid var(--border); border-left: 4px solid var(--gold);
+  border-radius: var(--radius); padding: 8px 10px; cursor: pointer;
+}
+.plan-card:hover { border-color: var(--green); }
+.plan-card.sel { border-color: var(--green); background: #f4f9f6; }
+.plan-name { font-weight: 800; color: var(--green); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-meta { font-size: 11px; color: var(--muted); margin: 2px 0; }
+.plan-courses { font-size: 12px; line-height: 1.35; max-height: 3.9em; overflow: hidden; }
+.plan-view-head { flex: none; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.plan-view-head h3 { margin: 0; flex: 1; min-width: 160px; }
+.plan-view { flex: 1; min-height: 0; overflow-y: auto; }
+.banner.warn.block { display: block; margin: 0 0 10px; }
+
+/* ---------- modality tags + locks */
+.mod-tag { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 700; margin-left: 6px; vertical-align: middle; white-space: nowrap; }
+.mod-tag.online { background: #E3EEF9; color: #1F4E79; }
+.mod-tag.hybrid { background: #F4E6F0; color: #7a3a63; }
+.mod-tag.inperson { background: var(--gold-light); color: var(--green-dark); }
+.lock-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 9px; border-radius: 999px; background: var(--gold-light); color: var(--green-dark); font-size: 11px; font-weight: 700; white-space: nowrap; }
+.lock-tag button { border: 0; background: transparent; color: var(--green-dark); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 4px; border-radius: 50%; }
+.lock-tag button:hover { background: #fbe9e7; color: var(--danger); }
+.only-btn { padding: 3px 8px; font-size: 11px; }

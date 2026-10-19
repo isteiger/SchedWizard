@@ -95,6 +95,85 @@
     };
   }
 
+  // ---------- plan page parsing ----------
+
+  // Given text and the index of an opening '[' or '{', return the index of its matching closer
+  // (honoring string literals and escapes), or -1.
+  function matchBracket(text, open) {
+    let depth = 0;
+    let inStr = null;
+    for (let i = open; i < text.length; i++) {
+      const c = text[i];
+      if (inStr) {
+        if (c === '\\') i++;
+        else if (c === inStr) inStr = null;
+        continue;
+      }
+      if (c === '"' || c === "'") inStr = c;
+      else if (c === '[' || c === '{') depth++;
+      else if (c === ']' || c === '}') { depth--; if (depth === 0) return i; }
+    }
+    return -1;
+  }
+
+  // Extract the JSON array that follows `plans:` in window.bootstraps of /plan/selectPlan.
+  function extractPlansArray(html) {
+    const text = String(html || '');
+    const re = /\bplans\s*:\s*\[/g;
+    let m;
+    while ((m = re.exec(text))) {
+      const open = m.index + m[0].length - 1;
+      const close = matchBracket(text, open);
+      if (close < 0) continue;
+      try {
+        const arr = JSON.parse(text.slice(open, close + 1));
+        if (Array.isArray(arr)) return arr;
+      } catch (e) { /* try the next occurrence */ }
+    }
+    return null;
+  }
+
+  function firstDef() {
+    for (const v of arguments) if (v !== undefined && v !== null && v !== '') return v;
+    return undefined;
+  }
+
+  function parsePlanCourse(c) {
+    c = c || {};
+    const p = c.properties && typeof c.properties === 'object' ? c.properties : {};
+    const subject = String(firstDef(c.subject, p.subject, '') || '');
+    const courseNumber = String(firstDef(c.courseNumber, p.courseNumber, '') || '');
+    const secCand = firstDef(c.sequenceNumber, p.sequenceNumber, c.sectionNumber, p.section, c.section);
+    const section = secCand != null && String(secCand).toLowerCase() !== 'section' ? String(secCand) : '';
+    const cr = firstDef(c.creditHours, p.creditHours, c.creditHourLow, p.creditHourLow, c.creditHourHigh, 0);
+    const credits = Number(cr);
+    return {
+      crn: String(firstDef(c.courseReferenceNumber, p.courseReferenceNumber, '') || ''),
+      subject, courseNumber,
+      courseKey: `${subject} ${courseNumber}`.trim(),
+      section,
+      title: decodeHtml(firstDef(c.courseTitle, p.courseTitle, '') || ''),
+      credits: Number.isFinite(credits) ? credits : 0,
+    };
+  }
+
+  // Pure: HTML of /plan/selectPlan -> [{seq, name, comment, courses:[...]}] (empty array when none/unparseable).
+  function parsePlansFromHtml(html) {
+    const arr = extractPlansArray(html) || [];
+    return arr.filter((p) => p && typeof p === 'object').map((p, i) => ({
+      seq: firstDef(p.sequenceNumber, p.planSequenceNumber, p.id, i + 1),
+      name: decodeHtml(firstDef(p.description, p.planDescription, p.headerDescription, p.name, '') || '') || 'Untitled Plan',
+      comment: decodeHtml(firstDef(p.comment, p.headerComment, '') || ''),
+      courses: (Array.isArray(p.planCourses) ? p.planCourses : []).map(parsePlanCourse).filter((c) => c.crn),
+    }));
+  }
+
+  // "You are allowed a maximum of 5 plans for this term." -> 5 (default 5)
+  function parseMaxPlans(html) {
+    const m = /maximum\s+of\s+(\d+)\s+plans?/i.exec(String(html || ''));
+    return m ? parseInt(m[1], 10) : 5;
+  }
+
   // ---------- network layer (browser only) ----------
 
   let queue = Promise.resolve();
@@ -198,6 +277,17 @@
     });
   }
 
+  // Existing plans for a term. Switches the server session to plan mode.
+  function getPlans(term) {
+    return enqueue(async () => {
+      await request('/term/search?mode=plan', { method: 'POST', body: termBody(term) });
+      searchTerm = null; // no longer in search mode; next searchCourse re-selects it
+      const html = await request('/plan/selectPlan', { html: true });
+      if (!/bootstraps|plans\s*:/.test(html)) throw sessionExpired('unexpected plans page');
+      return { plans: parsePlansFromHtml(html), max: parseMaxPlans(html) };
+    });
+  }
+
   function applyPlan(term, crns, planName, onProgress) {
     const say = (m) => { if (onProgress) { try { onProgress(m); } catch (e) { /* ignore UI errors */ } } };
     return enqueue(async () => {
@@ -252,6 +342,6 @@
     });
   }
 
-  SW.api = { getTerms, searchCourse, normalizeSection, applyPlan, decodeHtml };
+  SW.api = { getTerms, searchCourse, normalizeSection, applyPlan, getPlans, parsePlansFromHtml, parseMaxPlans, decodeHtml };
   if (typeof module !== 'undefined' && module.exports) module.exports = SW.api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

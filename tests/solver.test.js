@@ -111,7 +111,7 @@ test('sorting: compact, fewestDays, latestStart, earliestEnd, mostSeats', () => 
   assert.strictEqual(order('mostSeats')[0], 'gap');
   const best = gen([x, y], { sort: 'compact' }).schedules[0];
   assert.deepStrictEqual(best.stats, {
-    days: 2, totalGapMinutes: 4, earliestStart: 600, latestEnd: 720, credits: 6, minSeats: 3, avgProfRating: null,
+    days: 2, totalGapMinutes: 4, earliestStart: 600, latestEnd: 720, credits: 6, minSeats: 3, avgProfRating: null, onlineCount: 0,
   });
 });
 
@@ -223,6 +223,31 @@ test('bestProfs sort orders by mean professor rating; unrated count as 3.0', () 
   assert.strictEqual(r.schedules[1].stats.avgProfRating, 4.0); // only known ratings averaged
   const none = gen([course('A 1', [sec('A 1', [mt([1], 600, 650)])])]);
   assert.strictEqual(none.schedules[0].stats.avgProfRating, null);
+});
+
+test('isOnline: flag, method regex, hybrid excluded', () => {
+  assert.strictEqual(solver.isOnline({ online: false, method: 'Face-to-Face Instruction' }), false);
+  assert.strictEqual(solver.isOnline({ online: true, method: '' }), true);
+  assert.strictEqual(solver.isOnline({ online: false, method: 'Online Asynchronous' }), true);
+  assert.strictEqual(solver.isOnline({ online: false, method: 'Distance Learning' }), true);
+  assert.strictEqual(solver.isOnline({ online: false, method: 'Remote Synchronous' }), true);
+  assert.strictEqual(solver.isOnline({ online: false, method: 'Hybrid (Online + Face-to-Face)' }), false);
+  assert.strictEqual(solver.isOnline({ online: true, method: 'Blended' }), false, 'hybrid wins over flag');
+  assert.strictEqual(solver.isHybrid({ method: 'Blended Learning' }), true);
+});
+
+test('modality preference: preferOnline / preferInPerson rank first, then sort within', () => {
+  const inp = sec('A 1', [mt([1], 600, 650)], { section: 'inp' });
+  const onl = sec('A 1', [], { section: 'onl', method: 'Online Asynchronous' });
+  const hyb = sec('A 1', [mt([2], 600, 650)], { section: 'hyb', method: 'Hybrid' });
+  const inp2 = sec('A 1', [mt([3], 600, 650), mt([4], 600, 650)], { section: 'inp2' });
+  const order = (modality, sort) => gen([course('A 1', [inp, onl, hyb, inp2])], { modality, sort }).schedules.map((s) => s.sections[0].section);
+  assert.deepStrictEqual(order('preferOnline'), ['onl', 'hyb', 'inp', 'inp2']);
+  assert.deepStrictEqual(order('preferInPerson'), ['inp', 'inp2', 'hyb', 'onl']);
+  assert.strictEqual(order('preferOnline', 'fewestDays')[0], 'onl');
+  assert.strictEqual(gen([course('A 1', [inp, onl])], {}).total, 2);
+  const r = gen([course('A 1', [inp]), course('B 1', [onl])], { modality: 'preferOnline' });
+  assert.strictEqual(r.schedules[0].stats.onlineCount, 1);
 });
 
 // ---------- runner ----------

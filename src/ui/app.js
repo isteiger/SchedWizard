@@ -107,6 +107,35 @@
     const m = /^\s*([A-Za-z]{2,5})[\s\-_]*([0-9]{3,4}[A-Za-z]?)\s*$/.exec(raw || '');
     return m ? m[1].toUpperCase() + ' ' + m[2].toUpperCase() : null;
   }
+  // Course input forms: "MATH 2164", "MATH 2164-003", "MATH 2164 003", "MATH2164.003", bare 5-digit CRN.
+  function parseCourseInput(raw) {
+    const t = String(raw == null ? '' : raw).trim();
+    if (/^\d{5}$/.test(t)) return { crn: t };
+    const m = /^([A-Za-z]{2,5})[\s\-_]*([0-9]{3,4}[A-Za-z]?)[\s\-_.]+([0-9A-Za-z]{2,4})$/.exec(t);
+    if (m) return { key: m[1].toUpperCase() + ' ' + m[2].toUpperCase(), section: m[3].toUpperCase() };
+    const key = normalizeCourseKey(t);
+    return key ? { key } : null;
+  }
+  function sameSection(a, b) {
+    const x = String(a || '').toUpperCase(), y = String(b || '').toUpperCase();
+    if (x === y) return true;
+    return /^\d+$/.test(x) && /^\d+$/.test(y) && parseInt(x, 10) === parseInt(y, 10);
+  }
+  const MODALITIES = [
+    ['any', 'No preference'],
+    ['preferOnline', 'Prefer online'],
+    ['preferInPerson', 'Prefer in-person'],
+    ['onlineOnly', 'Online only'],
+    ['inPersonOnly', 'In-person only'],
+  ];
+  const MOD_LABELS = { online: 'Online', hybrid: 'Hybrid', inperson: 'In person' };
+  function modalityOf(sec) {
+    return SW.solver && SW.solver.modalityOf ? SW.solver.modalityOf(sec) : (sec && sec.online ? 'online' : 'inperson');
+  }
+  function modTag(sec) {
+    const m = modalityOf(sec);
+    return h('span', { class: 'mod-tag ' + m }, MOD_LABELS[m]);
+  }
   function isFull(sec) { return !(sec.seats > 0); }
   function errMsg(e) { return (e && e.message) || String(e || 'Unknown error'); }
   function uid() { return Math.random().toString(36).slice(2, 9); }
@@ -114,7 +143,7 @@
   // ---------------------------------------------------------------- mount
   function mount(shadow, host, cssText) {
     // ---- state
-    const defaultOptions = () => ({ earliest: null, latest: null, daysOff: [], allowFull: false, sort: 'compact', minRating: null, allowUnrated: true });
+    const defaultOptions = () => ({ earliest: null, latest: null, daysOff: [], allowFull: false, sort: 'compact', minRating: null, allowUnrated: true, modality: 'any' });
     const S = {
       open: false,
       initialized: false,
@@ -128,7 +157,11 @@
       breaks: [],             // {id, days, start, end, label}
       options: defaultOptions(),
       deselected: {},         // crn -> true
+      locks: {},              // courseKey -> {section, crns[]} (typed "locked to one section")
       byTerm: {},             // term -> saved snapshot (persisted)
+      plans: { term: null, status: 'idle', list: [], max: 5, error: '' },  // existing Banner plans
+      plansOpen: true,
+      planView: null,         // {plan, loading, sections, missing} read-only plan view in the Schedules step
       // runtime only
       cache: {},              // term|key -> {status, sections, title, error}
       courseInput: '',
@@ -159,7 +192,7 @@
 
     // ---- persistence
     function snapshot() {
-      return { courses: S.courses.slice(), breaks: S.breaks, options: S.options, deselected: S.deselected };
+      return { courses: S.courses.slice(), breaks: S.breaks, options: S.options, deselected: S.deselected, locks: S.locks };
     }
     function save() {
       try {
@@ -186,7 +219,8 @@
       S.breaks = Array.isArray(snap.breaks) ? snap.breaks.filter((b) => b && Array.isArray(b.days)).map((b) => Object.assign({ id: uid(), label: '' }, b)) : [];
       S.options = Object.assign(defaultOptions(), snap.options || {});
       S.deselected = snap.deselected && typeof snap.deselected === 'object' ? snap.deselected : {};
-      S.result = null; S.selIdx = 0;
+      S.locks = snap.locks && typeof snap.locks === 'object' ? snap.locks : {};
+      S.result = null; S.selIdx = 0; S.planView = null;
     }
     // any input-affecting change
     function changed() { S.result = null; S.selIdx = 0; save(); }
@@ -231,6 +265,134 @@
         }
       } finally { batching = false; }
       requestRmp();
+    }
+
+    // Resolve once a course is in the cache as ok/error (fetching it if needed).
+    async function ensureLoaded(key) {
+      const id = ck(S.term, key);
+      let c = S.cache[id];
+      if (!c || c.status === 'error') { delete S.cache[id]; await fetchCourse(key); return; }
+      for (let n = 0; c && c.status === 'loading' && n < 600; n++) {
+        await new Promise((r) => setTimeout(r, 50));
+        c = S.cache[id];
+      }
+    }
+
+    // ---- existing Banner plans
+    async function loadPlans() {
+      const term = S.term;
+      if (!term) return;
+      const prev = S.plans.term === term ? S.plans : null;
+      S.plans = { term, status: 'loading', list: prev ? prev.list : [], max: prev ? prev.max : 5, error: '' };
+      render();
+      try {
+        const r = await SW.api.getPlans(term);
+        if (S.term !== term) return;
+        S.plans = { term, status: 'ok', list: (r && r.plans) || [], max: (r && r.max) || 5, error: '' };
+      } catch (e) {
+        handleApiError(e);
+        if (S.term !== term) return;
+        S.plans = { term, status: 'error', list: [], max: 5, error: errMsg(e) };
+      }
+      render();
+    }
+    function planCredits(plan) { return plan.courses.reduce((a, c) => a + (c.credits || 0), 0); }
+    function planKeys(plan) {
+      const keys = [];
+      plan.courses.forEach((c) => { if (c.courseKey && keys.indexOf(c.courseKey) < 0) keys.push(c.courseKey); });
+      return keys;
+    }
+    async function viewPlan(plan) {
+      const term = S.term;
+      const pv = { plan, loading: true, sections: [], missing: [] };
+      S.planView = pv; S.step = 4; render();
+      for (const key of planKeys(plan)) {
+        if (S.planView !== pv || S.term !== term) return;
+        try { await ensureLoaded(key); } catch (e) { handleApiError(e); }
+      }
+      if (S.planView !== pv || S.term !== term) return;
+      plan.courses.forEach((c) => {
+        const i = S.cache[ck(term, c.courseKey)];
+        const sec = i && i.status === 'ok' ? i.sections.find((s) => s.crn === c.crn) : null;
+        if (sec) pv.sections.push(sec); else pv.missing.push(c);
+      });
+      pv.loading = false; render(); requestRmp();
+    }
+    async function loadPlanIntoWizard(plan) {
+      const term = S.term;
+      const keys = planKeys(plan);
+      if (!keys.length) { toast('This plan has no courses'); return; }
+      keys.forEach((k) => { if (S.courses.indexOf(k) < 0) S.courses.push(k); });
+      changed(); render();
+      toast('Loading plan into the wizard…');
+      for (const key of keys) {
+        try { await ensureLoaded(key); } catch (e) { handleApiError(e); }
+      }
+      if (S.term !== term) return;
+      const missing = [];
+      keys.forEach((k) => {
+        const i = info(k);
+        if (!i || i.status !== 'ok') { missing.push(k); return; }
+        const want = {};
+        plan.courses.forEach((c) => { if (c.courseKey === k) want[c.crn] = true; });
+        i.sections.forEach((s) => { if (want[s.crn]) delete S.deselected[s.crn]; else S.deselected[s.crn] = true; });
+        delete S.locks[k];
+      });
+      changed();
+      S.planView = null; S.step = 3; render();
+      toast(missing.length ? 'Loaded, but could not fetch: ' + missing.join(', ') : 'Plan loaded: ' + keys.length + ' courses selected');
+    }
+
+    // ---- exact-section locks
+    function applyLock(key, matches) {
+      const i = info(key);
+      if (!i || i.status !== 'ok') return;
+      i.sections.forEach((s) => { if (matches.indexOf(s) >= 0) delete S.deselected[s.crn]; else S.deselected[s.crn] = true; });
+      S.locks[key] = { section: matches[0].section, crns: matches.map((s) => s.crn) };
+      changed(); render();
+    }
+    async function lockSection(key, section) {
+      const term = S.term;
+      await ensureLoaded(key);
+      if (S.term !== term) return;
+      const i = info(key);
+      if (!i || i.status !== 'ok') return;
+      const matches = i.sections.filter((s) => sameSection(s.section, section));
+      if (!matches.length) { toast('Section ' + section + ' of ' + key + ' was not found'); return; }
+      applyLock(key, matches);
+    }
+    // Bare CRN: only resolvable against already-loaded courses. Returns true if found.
+    function lockCrn(crn) {
+      const prefix = S.term + '|';
+      for (const id of Object.keys(S.cache)) {
+        if (id.indexOf(prefix) !== 0) continue;
+        const c = S.cache[id];
+        if (!c || c.status !== 'ok') continue;
+        const sec = c.sections.find((s) => s.crn === crn);
+        if (!sec) continue;
+        if (S.courses.indexOf(sec.courseKey) < 0) S.courses.push(sec.courseKey);
+        applyLock(sec.courseKey, [sec]);
+        return true;
+      }
+      return false;
+    }
+    function activeLock(key) {
+      const L = S.locks[key];
+      if (!L || !Array.isArray(L.crns)) return null;
+      const sel = selectedSections(key).map((s) => s.crn);
+      return sel.length === L.crns.length && L.crns.every((c) => sel.indexOf(c) >= 0) ? L : null;
+    }
+    function unlock(key) {
+      delete S.locks[key];
+      const i = info(key);
+      if (i && i.status === 'ok') i.sections.forEach((s) => { delete S.deselected[s.crn]; });
+      changed(); render();
+    }
+    function onlySections(courseKey, keep) {
+      const i = info(courseKey);
+      if (!i || i.status !== 'ok') return;
+      i.sections.forEach((s) => { if (keep.indexOf(s) >= 0) delete S.deselected[s.crn]; else S.deselected[s.crn] = true; });
+      changed(); render();
     }
 
     // ---- RateMyProfessors
@@ -337,6 +499,7 @@
         S.initializing = false;
         render();
         fetchAllCourses();
+        loadPlans();
       } catch (e) {
         handleApiError(e);
         S.initError = errMsg(e);
@@ -351,8 +514,10 @@
       S.term = code;
       applySnapshot(S.byTerm[code]);
       save();
+      S.plans = { term: code, status: 'idle', list: [], max: 5, error: '' };
       render();
       fetchAllCourses();
+      loadPlans();
     }
 
     // ---- derived
@@ -369,7 +534,7 @@
     }
     function goStep(n) {
       if (n < 0 || n >= STEPS.length || !reachable(n)) return;
-      S.step = n; render();
+      S.step = n; S.planView = null; render();
     }
 
     // ---- scroll preservation + render
@@ -382,7 +547,7 @@
       const selStart = active && typeof active.selectionStart === 'number' ? active.selectionStart : null;
 
       const panel = h('div', { class: 'panel', role: 'dialog', 'aria-label': 'Niner Schedule Wizard' },
-        renderHeader(), renderTabs(), renderBanner(), renderBody(), S.step < 4 && S.initialized ? renderFooter() : null,
+        renderHeader(), renderTabs(), renderBanner(), renderPlansStrip(), renderBody(), S.step < 4 && S.initialized ? renderFooter() : null,
         S.modal ? renderModal() : null);
       tipEl = null;
       panelWrap.textContent = '';
@@ -429,6 +594,63 @@
         h('span', null, 'Your Banner session expired — refresh the page and log in.'),
         h('button', { class: 'btn small', type: 'button', onclick: () => { S.sessionExpired = false; render(); } }, 'Dismiss'));
     }
+    function renderPlansStrip() {
+      if (!S.initialized || !S.term) return null;
+      const p = S.plans.term === S.term ? S.plans : { status: 'idle', list: [], max: 5, error: '' };
+      const count = p.status === 'ok' ? String(p.list.length) : '…';
+      const head = h('div', { class: 'plans-head' },
+        h('button', { class: 'plans-toggle', type: 'button', 'aria-expanded': S.plansOpen ? 'true' : 'false', onclick: () => { S.plansOpen = !S.plansOpen; render(); } },
+          h('span', null, S.plansOpen ? '▾' : '▸'), 'Your plans for ' + termDesc(S.term) + ' (' + count + '/' + p.max + ')'),
+        p.status === 'loading' ? h('span', { class: 'spinner' }) : null,
+        h('button', { class: 'link-btn', type: 'button', disabled: p.status === 'loading', onclick: () => loadPlans() }, 'Refresh'),
+        h('a', { href: PLANS_URL, target: '_blank', rel: 'noopener' }, 'Manage in Banner ↗'));
+      let body = null;
+      if (S.plansOpen) {
+        if (p.status === 'error') {
+          body = h('div', { class: 'row', style: { paddingTop: '6px' } }, h('span', { class: 'err small' }, 'Could not load plans: ' + p.error),
+            h('button', { class: 'link-btn', type: 'button', onclick: () => loadPlans() }, 'Retry'));
+        } else if (p.status === 'ok' && !p.list.length) {
+          body = h('div', { class: 'muted small', style: { paddingTop: '6px' } }, 'No plans yet for this term. Use "Apply as Plan" on a schedule to create one.');
+        } else if (p.list.length) {
+          body = h('div', { class: 'plans-list' }, p.list.map((plan) => {
+            const keys = planKeys(plan);
+            const sel = S.planView && S.planView.plan === plan;
+            return h('button', {
+              class: 'plan-card' + (sel ? ' sel' : ''), type: 'button', title: 'View "' + plan.name + '" read-only in the Schedules step',
+              onclick: () => viewPlan(plan),
+            },
+            h('div', { class: 'plan-name' }, plan.name),
+            h('div', { class: 'plan-meta' }, planCredits(plan) + ' cr · ' + plan.courses.length + (plan.courses.length === 1 ? ' section' : ' sections')),
+            h('div', { class: 'plan-courses' }, keys.length ? keys.join(', ') : 'Empty plan'));
+          }));
+        } else if (p.status === 'loading') {
+          body = h('div', { class: 'muted small', style: { paddingTop: '6px' } }, 'Loading your plans…');
+        }
+      }
+      return h('div', { class: 'plans-strip' }, head, body);
+    }
+    function renderPlanView() {
+      const pv = S.planView, plan = pv.plan;
+      const keys = planKeys(plan);
+      const colors = {};
+      keys.forEach((k, i) => { colors[k] = PALETTE[i % PALETTE.length]; });
+      const sch = { sections: pv.sections };
+      const head = h('div', { class: 'plan-view-head' },
+        h('button', { class: 'btn small', type: 'button', onclick: () => { S.planView = null; render(); } }, '← Back'),
+        h('h3', null, 'Plan: ' + plan.name),
+        h('span', { class: 'muted small' }, planCredits(plan) + ' credits · read-only'),
+        h('button', { class: 'btn gold', type: 'button', disabled: pv.loading, onclick: () => loadPlanIntoWizard(plan) }, 'Load into wizard'),
+        h('a', { href: PLANS_URL, target: '_blank', rel: 'noopener', class: 'small' }, 'Manage in Banner ↗'));
+      let content;
+      if (pv.loading) content = h('div', { class: 'center-msg' }, h('div', { class: 'spinner big' }), h('p', null, 'Loading sections for this plan…'));
+      else {
+        content = h('div', null,
+          pv.missing.length ? h('div', { class: 'banner warn block' }, 'Could not find details for: ' + pv.missing.map((c) => (c.courseKey || 'CRN') + ' (CRN ' + c.crn + ')').join(', ')) : null,
+          pv.sections.length ? [renderCalendar(sch, colors, true), renderOnlineList(sch, colors), renderTable(sch, colors)]
+            : h('div', { class: 'empty' }, 'No section details available for this plan.'));
+      }
+      return h('div', { class: 'sched-wrap' }, head, h('div', { class: 'plan-view', 'data-scroll': 'planview' }, content));
+    }
     function renderBody() {
       const body = h('main', { class: 'body step-' + S.step, 'data-scroll': 'body' });
       if (S.initializing) { body.appendChild(h('div', { class: 'center-msg' }, h('div', { class: 'spinner big' }), h('p', null, 'Loading terms…'))); return body; }
@@ -469,24 +691,35 @@
     function addCourses(text) {
       const parts = String(text || '').split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean);
       const bad = [];
+      const noCrn = [];
+      const lockJobs = [];
       let added = 0;
+      let crnLocked = false;
       parts.forEach((p) => {
-        const key = normalizeCourseKey(p);
-        if (!key) { bad.push(p); return; }
-        if (S.courses.indexOf(key) < 0) { S.courses.push(key); added++; }
+        const pi = parseCourseInput(p);
+        if (!pi) { bad.push(p); return; }
+        if (pi.crn) {
+          if (lockCrn(pi.crn)) crnLocked = true; else noCrn.push(pi.crn);
+          return;
+        }
+        if (S.courses.indexOf(pi.key) < 0) { S.courses.push(pi.key); added++; }
+        if (pi.section) lockJobs.push([pi.key, pi.section]);
       });
-      S.courseInput = bad.join(', ');
-      if (bad.length) toast('Could not read: ' + bad.join(', ') + ' (try e.g. MATH 2164)');
+      S.courseInput = bad.concat(noCrn).join(', ');
+      if (bad.length) toast('Could not read: ' + bad.join(', ') + ' (try e.g. MATH 2164 or MATH 2164-003)');
+      else if (noCrn.length) toast('Add the course first, then enter the CRN (' + noCrn.join(', ') + ')');
       if (added) { changed(); render(); S.courses.slice(-added).forEach((k) => fetchCourse(k)); }
-      else render();
+      else if (!crnLocked) render();
+      lockJobs.forEach(([k, sec]) => { lockSection(k, sec); });
     }
     function removeCourse(key) {
+      delete S.locks[key];
       S.courses = S.courses.filter((k) => k !== key);
       changed(); render();
     }
     function stepCourses() {
       const input = h('input', {
-        class: 'input', type: 'text', placeholder: 'e.g. MATH 2164, ITSC 1212', value: S.courseInput, 'data-focus': 'course-input',
+        class: 'input', type: 'text', placeholder: 'e.g. MATH 2164, ITSC 1212, MATH 2164-003', value: S.courseInput, 'data-focus': 'course-input',
         oninput: (e) => { S.courseInput = e.target.value; },
         onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); addCourses(input.value); } },
       });
@@ -496,15 +729,19 @@
         if (i.status === 'loading') detail = h('span', { class: 'muted' }, 'Searching…');
         else if (i.status === 'error') detail = h('span', { class: 'err' }, i.error);
         else detail = h('span', { class: 'chip-detail' }, [i.title, ' · ', i.sections.length + (i.sections.length === 1 ? ' section' : ' sections')]);
+        const lk = activeLock(key);
         return h('div', { class: 'chip ' + i.status },
           i.status === 'loading' ? h('span', { class: 'spinner' }) : h('span', { class: 'chip-dot' }),
           h('span', { class: 'chip-key' }, key), detail,
+          lk ? h('span', { class: 'lock-tag', title: 'Only section ' + lk.section + ' is selected' },
+            '\u{1F512} Sec ' + lk.section + ' only',
+            h('button', { type: 'button', title: 'Unlock (select all sections again)', 'aria-label': 'Unlock ' + key, onclick: () => unlock(key) }, '×')) : null,
           i.status === 'error' ? h('button', { class: 'link-btn', type: 'button', onclick: () => { delete S.cache[ck(S.term, key)]; fetchCourse(key); } }, 'Retry') : null,
           h('button', { class: 'chip-x', type: 'button', title: 'Remove ' + key, 'aria-label': 'Remove ' + key, onclick: () => removeCourse(key) }, '×'));
       });
       return h('section', { class: 'card' },
         h('h2', null, 'Add your courses'),
-        h('p', { class: 'muted' }, 'Type a subject and number. Separate several with commas — "math2164", "MATH-2164" and "MATH 2164" all work.'),
+        h('p', { class: 'muted' }, 'Type a subject and number. Separate several with commas — "math2164", "MATH-2164" and "MATH 2164" all work. To pick one exact section, add it like "MATH 2164-003", "MATH 2164 003" or "MATH2164.003", or enter a 5-digit CRN of a course you already added.'),
         h('div', { class: 'row' }, input, h('button', { class: 'btn primary', type: 'button', onclick: () => addCourses(input.value) }, 'Add')),
         S.courses.length ? h('div', { class: 'chips' }, chips) : h('div', { class: 'empty' }, 'No courses yet. Add the classes you want in ' + termDesc(S.term) + '.'));
     }
@@ -570,7 +807,15 @@
             h('label', { class: 'check', style: { marginTop: '6px' } },
               h('input', { type: 'checkbox', checked: o.allowUnrated !== false, onchange: (e) => { o.allowUnrated = e.target.checked; changed(); } }),
               h('span', null, 'Also allow unrated professors (and TBA)'))),
+          h('div', { class: 'field' }, h('label', null, 'Class format'), modalitySelect()),
           h('div', { class: 'field' }, h('label', null, 'Sort schedules by'), sortSelect())));
+    }
+    function modalitySelect() {
+      const sel = h('select', { class: 'input', 'data-focus': 'modality',
+        onchange: (e) => { S.options.modality = e.target.value; changed(); render(); } },
+      MODALITIES.map(([v, l]) => h('option', { value: v, selected: v === (S.options.modality || 'any') }, l)));
+      sel.value = S.options.modality || 'any';
+      return sel;
     }
     function minRatingSelect() {
       const cur = S.options.minRating == null ? '' : String(S.options.minRating);
@@ -656,6 +901,7 @@
           rmpBadge(primaryOfKey(g.name)),
           h('span', { class: 'grow' }),
           h('span', { class: 'muted small' }, g.secs.length + (g.secs.length === 1 ? ' section' : ' sections') + ' · ' + seats + '/' + cap + ' seats open'),
+          h('button', { class: 'btn small only-btn', type: 'button', title: 'Select only this professor\'s sections of ' + courseKey, onclick: () => onlySections(courseKey, g.secs) }, 'Only this prof'),
           h('button', { class: 'link-btn', type: 'button', onclick: () => { S.openProfs[gid] = !open; render(); } }, open ? 'Hide sections' : 'Show sections')));
       if (open) {
         wrap.appendChild(h('div', { class: 'sec-table' }, g.secs.map((s) => {
@@ -665,9 +911,13 @@
             h('span', { class: 'sec-num' }, s.section), h('span', { class: 'sec-crn muted' }, s.crn),
             h('span', { class: 'sec-type muted' }, s.scheduleType || ''),
             h('span', { class: 'sec-time' }, sectionTimes(s)),
-            h('span', { class: 'sec-loc' }, sectionLocation(s)),
+            h('span', { class: 'sec-loc' }, sectionLocation(s), modTag(s)),
             h('span', { class: 'sec-seats' }, full ? h('span', { class: 'badge bad' }, 'FULL') : null, ' ' + Math.max(0, s.seats) + '/' + s.capacity),
-            h('span', { class: 'sec-method muted' }, s.method || ''));
+            h('span', { class: 'sec-method muted' }, s.method || ''),
+            h('button', {
+              class: 'btn small only-btn', type: 'button', title: 'Select only section ' + s.section + ' of ' + courseKey,
+              onclick: (e) => { e.preventDefault(); e.stopPropagation(); onlySections(courseKey, [s]); },
+            }, 'Only this'));
         })));
       }
       return wrap;
@@ -676,11 +926,15 @@
     // ---- step 5: schedules
     function buildInput() {
       const o = S.options;
+      const mode = o.modality || 'any';
       const courses = loadedCourses().map(({ key }) => ({
         key,
         sections: selectedSections(key).filter((sec) => {
           const r = ratingOf(primaryProf(sec));
           sec.profRating = r;
+          // Hybrid counts as in-person for the "only" filters.
+          if (mode === 'onlineOnly' && !SW.solver.isOnline(sec)) return false;
+          if (mode === 'inPersonOnly' && SW.solver.isOnline(sec)) return false;
           if (o.minRating == null) return true;
           return r == null ? o.allowUnrated !== false : r >= o.minRating;
         }),
@@ -689,7 +943,8 @@
         courses,
         breaks: S.breaks.filter((b) => b.start != null && b.end != null && b.end > b.start && b.days.length)
           .map((b) => ({ days: b.days.slice(), start: b.start, end: b.end, label: b.label || 'Break' })),
-        options: { earliest: o.earliest, latest: o.latest, daysOff: o.daysOff.slice(), allowFull: !!o.allowFull, maxResults: 200, sort: o.sort },
+        options: { earliest: o.earliest, latest: o.latest, daysOff: o.daysOff.slice(), allowFull: !!o.allowFull, maxResults: 200, sort: o.sort,
+          modality: mode === 'preferOnline' || mode === 'preferInPerson' ? mode : undefined },
       };
     }
     function generate() {
@@ -697,7 +952,8 @@
       const input = buildInput();
       const empty = input.courses.filter((c) => !c.sections.length).map((c) => c.key);
       if (empty.length) {
-        S.result = { schedules: [], total: 0, truncated: false, errors: ['No sections selected for ' + empty.join(', ') + '. Go back to "Sections & Professors"' + (S.options.minRating != null ? ' or loosen the minimum professor rating.' : '.')] };
+        S.result = { schedules: [], total: 0, truncated: false, errors: ['No sections selected for ' + empty.join(', ') + '. Go back to "Sections & Professors"' + (S.options.minRating != null ? ' or loosen the minimum professor rating.' : '.') +
+          (/Only$/.test(S.options.modality || '') ? ' (Your "Class format" setting excludes some sections.)' : '')] };
         render(); return;
       }
       S.generating = true; S.result = null; render();
@@ -724,6 +980,7 @@
     }
 
     function stepSchedules() {
+      if (S.planView) return renderPlanView();
       const r = S.result;
       const toolbar = h('div', { class: 'sched-toolbar' },
         h('button', { class: 'btn primary', type: 'button', disabled: S.generating, onclick: generate }, S.generating ? 'Generating…' : (r ? 'Regenerate' : 'Generate schedules')),
@@ -758,6 +1015,7 @@
           h('div', { class: 'sc-stats muted small' },
             h('span', null, ((st.totalGapMinutes || 0) / 60).toFixed(1) + ' h gaps'), h('span', null, (st.credits != null ? st.credits : 0) + ' cr'),
             h('span', null, 'min ' + (st.minSeats != null && isFinite(st.minSeats) ? st.minSeats : '—') + ' seats'),
+            st.onlineCount > 0 ? h('span', null, st.onlineCount + ' online') : null,
             st.avgProfRating != null ? h('span', null, 'avg prof \u2605' + st.avgProfRating.toFixed(1)) : null));
       }));
     }
@@ -794,7 +1052,7 @@
         renderTable(sch, colors));
     }
 
-    function renderCalendar(sch, colors) {
+    function renderCalendar(sch, colors, noBreaks) {
       // days + range
       const used = new Set([1, 2, 3, 4, 5]);
       let lo = Infinity, hi = -Infinity;
@@ -817,7 +1075,7 @@
       const cols = days.map(([letter, num]) => {
         const col = h('div', { class: 'cal-col', style: { height: (end - start) * ppm + 'px' } });
         const items = [];
-        S.breaks.forEach((b) => { if (b.days.indexOf(num) >= 0 && b.start != null && b.end > b.start && b.start < end && b.end > start) items.push({ kind: 'break', s: b.start, e: b.end, b }); });
+        (noBreaks ? [] : S.breaks).forEach((b) => { if (b.days.indexOf(num) >= 0 && b.start != null && b.end > b.start && b.start < end && b.end > start) items.push({ kind: 'break', s: b.start, e: b.end, b }); });
         sch.sections.forEach((sec) => (sec.meetings || []).forEach((m) => { if (m.days.indexOf(num) >= 0) items.push({ kind: 'sec', s: m.start, e: m.end, sec, m }); }));
         // lane assignment for overlapping items
         items.sort((a, b) => a.s - b.s || a.e - b.e);
@@ -861,7 +1119,7 @@
     function renderTable(sch, colors) {
       const rows = sch.sections.map((s) => h('tr', null,
         h('td', null, h('span', { class: 'swatch', style: { background: colors[s.courseKey] || PALETTE[0] } }), h('strong', null, s.courseKey), h('div', { class: 'muted small' }, s.title)),
-        h('td', null, s.section), h('td', null, s.crn), h('td', null, profLabel(s), ' ', rmpBadge(primaryProf(s))), h('td', null, sectionTimes(s)), h('td', null, sectionLocation(s)),
+        h('td', null, s.section, modTag(s)), h('td', null, s.crn), h('td', null, profLabel(s), ' ', rmpBadge(primaryProf(s))), h('td', null, sectionTimes(s)), h('td', null, sectionLocation(s)),
         h('td', null, Math.max(0, s.seats) + '/' + s.capacity)));
       return h('div', { class: 'table-wrap' }, h('table', { class: 'tbl' },
         h('thead', null, h('tr', null, ['Course', 'Sec', 'CRN', 'Instructor', 'Times', 'Location', 'Seats'].map((t) => h('th', null, t)))),
@@ -903,10 +1161,12 @@
         m.running = false; m.done = true; m.ok = !!(res && res.ok);
         m.messages = (res && res.messages) || []; m.failed = (res && res.failedCrns) || [];
         render();
+        loadPlans();
       }, (e) => {
         handleApiError(e);
         m.running = false; m.done = true; m.ok = false; m.messages = [errMsg(e)]; m.failed = [];
         render();
+        loadPlans();
       });
     }
     function renderModalLog() {
@@ -930,7 +1190,11 @@
         body = h('div', null, h('div', { class: 'row' }, h('span', { class: 'spinner' }), h('strong', null, 'Saving your plan…')),
           h('div', { class: 'm-log' }, m.lines.map((l) => h('div', null, l))));
       } else {
+        const pl = S.plans.term === S.term && S.plans.status === 'ok' ? S.plans : null;
         body = h('div', null,
+          pl && pl.list.length >= pl.max
+            ? h('div', { class: 'banner warn block', role: 'alert' }, 'You already have ' + pl.list.length + '/' + pl.max + ' plans for this term. Banner will reject a new one — delete a plan in Banner first (use "Manage in Banner" in the plans strip), then try again.')
+            : null,
           h('div', { class: 'field' }, h('label', null, 'Plan name (max 30 characters)'),
             h('input', { class: 'input', type: 'text', maxlength: '30', value: m.name, 'data-focus': 'planname', oninput: (e) => { m.name = e.target.value; },
               onkeydown: (e) => { if (e.key === 'Enter') runApply(); } })),
@@ -959,6 +1223,6 @@
     return ctrl;
   }
 
-  SW.ui = { mount, _helpers: { toMin, fromMin, normalizeCourseKey } };
+  SW.ui = { mount, _helpers: { toMin, fromMin, normalizeCourseKey, parseCourseInput } };
   if (typeof module !== 'undefined' && module.exports) module.exports = SW.ui;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
