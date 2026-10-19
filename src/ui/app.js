@@ -153,7 +153,7 @@
   // ---------------------------------------------------------------- mount
   function mount(shadow, host, cssText) {
     // ---- state
-    const defaultOptions = () => ({ earliest: null, latest: null, daysOff: [], allowFull: false, sort: 'compact', minRating: null, allowUnrated: true, modality: 'any' });
+    const defaultOptions = () => ({ earliest: null, latest: null, daysOff: [], allowFull: false, sort: 'compact', minRating: null, allowUnrated: true, modality: 'any', autoLabs: true });
     const S = {
       open: false,
       initialized: false,
@@ -168,6 +168,7 @@
       options: defaultOptions(),
       deselected: {},         // crn -> true
       locks: {},              // courseKey -> {section, crns[]} (typed "locked to one section")
+      autoLabs: {},           // lab key -> lecture key it was auto-added for (per term)
       dismissedPairs: {},     // companion course key -> true (lab/lecture suggestion dismissed; per term)
       byTerm: {},             // term -> saved snapshot (persisted)
       plans: { term: null, status: 'idle', list: [], max: 5, error: '' },  // existing Banner plans
@@ -203,7 +204,7 @@
 
     // ---- persistence
     function snapshot() {
-      return { courses: S.courses.slice(), breaks: S.breaks, options: S.options, deselected: S.deselected, locks: S.locks, dismissedPairs: S.dismissedPairs };
+      return { courses: S.courses.slice(), breaks: S.breaks, options: S.options, deselected: S.deselected, locks: S.locks, dismissedPairs: S.dismissedPairs, autoLabs: S.autoLabs };
     }
     function save() {
       try {
@@ -231,6 +232,7 @@
       S.options = Object.assign(defaultOptions(), snap.options || {});
       S.deselected = snap.deselected && typeof snap.deselected === 'object' ? snap.deselected : {};
       S.locks = snap.locks && typeof snap.locks === 'object' ? snap.locks : {};
+      S.autoLabs = snap.autoLabs && typeof snap.autoLabs === 'object' ? snap.autoLabs : {};
       S.dismissedPairs = snap.dismissedPairs && typeof snap.dismissedPairs === 'object' ? snap.dismissedPairs : {};
       S.result = null; S.selIdx = 0; S.planView = null;
     }
@@ -270,7 +272,22 @@
       const comp = companionKey(key);
       const c = S.cache[id];
       if (comp && c && c.status === 'ok' && S.term === term && S.courses.indexOf(key) >= 0 && S.courses.indexOf(comp) < 0
-        && !S.dismissedPairs[comp] && !S.cache[ck(term, comp)]) fetchCourse(comp);
+        && !S.dismissedPairs[comp]) {
+        // Failures here must never affect the original course (fetchCourse records its own errors).
+        companionLookup(key, comp, term).catch(() => { /* ignore */ });
+      }
+    }
+    async function companionLookup(key, comp, term) {
+      if (!S.cache[ck(term, comp)]) await fetchCourse(comp);
+      const c = S.cache[ck(term, comp)];
+      const isLab = /L$/.test(comp);
+      if (S.term !== term || !c || c.status !== 'ok' || !c.sections.length) { render(); return; }
+      if (isLab && S.options.autoLabs !== false && S.courses.indexOf(key) >= 0 && S.courses.indexOf(comp) < 0 && !S.dismissedPairs[comp]) {
+        S.courses.splice(S.courses.indexOf(key) + 1, 0, comp);
+        S.autoLabs[comp] = key;
+        changed();
+      }
+      render();
     }
     // "CHEM 1251" <-> "CHEM 1251L"
     function companionKey(key) {
@@ -746,6 +763,9 @@
     }
     function removeCourse(key) {
       delete S.locks[key];
+      // Removing a lab (auto-added or not) means "don't re-add it for this term".
+      if (/L$/.test(key) && companionKey(key)) S.dismissedPairs[key] = true;
+      delete S.autoLabs[key];
       S.courses = S.courses.filter((k) => k !== key);
       changed(); render();
     }
@@ -767,6 +787,8 @@
         const chip = h('div', { class: 'chip ' + i.status },
           i.status === 'loading' ? h('span', { class: 'spinner' }) : h('span', { class: 'chip-dot' }),
           h('span', { class: 'chip-key' }, key), detail,
+          S.autoLabs[key] && S.courses.indexOf(S.autoLabs[key]) >= 0
+            ? h('span', { class: 'lock-tag', title: 'Usually taken together. Remove × if you are taking it another semester.' }, 'Lab for ' + S.autoLabs[key] + ' · added automatically (usually taken together — remove × if you are taking it another semester)') : null,
           lk ? h('span', { class: 'lock-tag', title: 'Only section ' + lk.section + ' is selected' },
             '\u{1F512} Sec ' + lk.section + ' only',
             h('button', { type: 'button', title: 'Unlock (select all sections again)', 'aria-label': 'Unlock ' + key, onclick: () => unlock(key) }, '×')) : null,
@@ -842,6 +864,9 @@
           h('div', { class: 'field' }, h('label', { class: 'check' },
             h('input', { type: 'checkbox', checked: !!o.allowFull, onchange: (e) => { o.allowFull = e.target.checked; changed(); } }),
             h('span', null, 'Include full sections (no seats available)'))),
+          h('div', { class: 'field' }, h('label', { class: 'check' },
+            h('input', { type: 'checkbox', checked: o.autoLabs !== false, onchange: (e) => { o.autoLabs = e.target.checked; changed(); } }),
+            h('span', null, 'Auto-add matching labs (e.g. CHEM 1251 adds CHEM 1251L)'))),
           h('div', { class: 'field' }, h('label', null, 'Minimum professor rating (RateMyProfessors)'),
             minRatingSelect(),
             h('label', { class: 'check', style: { marginTop: '6px' } },
