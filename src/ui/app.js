@@ -601,7 +601,7 @@
       const selStart = active && typeof active.selectionStart === 'number' ? active.selectionStart : null;
 
       const panel = h('div', { class: 'panel', role: 'dialog', 'aria-label': 'Niner Schedule Wizard' },
-        renderHeader(), renderTabs(), renderBanner(), renderPlansStrip(), renderBody(), S.step < 4 && S.initialized ? renderFooter() : null,
+        renderHeader(), renderTabs(), renderBanner(), renderPlansStrip(), renderBody(), S.step < 4 && S.initialized ? renderFooter() : null, renderCredit(),
         S.modal ? renderModal() : null);
       tipEl = null;
       panelWrap.textContent = '';
@@ -718,6 +718,12 @@
       const fn = [stepTerm, stepCourses, stepPrefs, stepSections, stepSchedules][S.step];
       body.appendChild(fn());
       return body;
+    }
+    function renderCredit() {
+      return h('div', { class: 'credit' },
+        h('span', null, 'Created by Ian Steiger'),
+        h('span', { class: 'credit-sep' }, '·'),
+        h('a', { href: 'https://ko-fi.com/isteiger', target: '_blank', rel: 'noopener' }, '☕ ko-fi.com/isteiger'));
     }
     function renderFooter() {
       const next = S.step + 1;

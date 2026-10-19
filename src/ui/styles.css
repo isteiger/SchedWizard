@@ -322,3 +322,13 @@ input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--green); cu
 .only-btn { padding: 3px 8px; font-size: 11px; }
 .banner.info.block { display: block; margin: 4px 0 0; padding: 6px 12px; background: #EEF6FF; color: #1d4e89; border-radius: var(--radius); font-weight: 500; font-size: 13px; }
 .banner.info.block .btn, .banner.info.block .chip-x { margin-left: 8px; }
+
+/* ---- credit line */
+.credit {
+  flex: none; display: flex; justify-content: center; align-items: center; gap: 8px;
+  padding: 6px 16px; font-size: 12px; color: var(--muted, #5B6B62);
+  border-top: 1px solid var(--border, #D9D6CC); background: #fff;
+}
+.credit a { color: #005035; font-weight: 600; text-decoration: none; }
+.credit a:hover { color: #A49665; text-decoration: underline; }
+.credit-sep { color: #A49665; }
