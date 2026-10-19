@@ -723,7 +723,12 @@
       return h('div', { class: 'credit' },
         h('span', null, 'Created by Ian Steiger'),
         h('span', { class: 'credit-sep' }, '·'),
-        h('a', { href: 'https://ko-fi.com/isteiger', target: '_blank', rel: 'noopener' }, '☕ ko-fi.com/isteiger'));
+        h('a', { href: 'https://ko-fi.com/isteiger', target: '_blank', rel: 'noopener' }, '☕ ko-fi.com/isteiger'),
+        h('span', { class: 'credit-sep' }, '·'),
+        h('span', null, 'v' + extVersion()));
+    }
+    function extVersion() {
+      try { return chrome.runtime.getManifest().version; } catch (e) { return '?'; }
     }
     function renderFooter() {
       const next = S.step + 1;
