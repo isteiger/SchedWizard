@@ -251,27 +251,45 @@
 
   function searchCourse(term, subject, courseNumber) {
     return enqueue(async () => {
-      if (searchTerm !== term) {
+      const selectTerm = async () => {
         searchTerm = null;
         await request('/term/search?mode=search', { method: 'POST', body: termBody(term) });
         searchTerm = term;
+      };
+      const runSearch = async () => {
+        await request('/classSearch/resetDataForm', { method: 'POST', body: '' });
+        const uniqueSessionId = Math.random().toString(36).slice(2, 7) + Date.now();
+        const all = [];
+        for (;;) {
+          const qs = form({
+            txt_subject: subject, txt_courseNumber: courseNumber, txt_term: term,
+            startDatepicker: '', endDatepicker: '', uniqueSessionId,
+            pageOffset: all.length, pageMaxSize: PAGE_SIZE,
+            sortColumn: 'subjectDescription', sortDirection: 'asc',
+          });
+          const res = await request('/searchResults/searchResults?' + qs);
+          const data = (res && res.data) || [];
+          all.push(...data);
+          const total = (res && res.totalCount) || 0;
+          if (!data.length || all.length >= total) break;
+        }
+        return all;
+      };
+      // The Banner session is shared with other tabs, so the cached searchTerm may be stale.
+      const wrongTerm = (all) => all.some((r) => r && r.term != null && String(r.term) !== String(term));
+      if (searchTerm !== term) await selectTerm();
+      let all;
+      try {
+        all = await runSearch();
+      } catch (e) {
+        // A non-JSON reply may just mean the session left search mode; re-select once before giving up.
+        if (!e || e.code !== 'SESSION_EXPIRED' || !/non-JSON/.test(e.message)) throw e;
+        await selectTerm();
+        return runSearch();
       }
-      await request('/classSearch/resetDataForm', { method: 'POST', body: '' });
-
-      const uniqueSessionId = Math.random().toString(36).slice(2, 7) + Date.now();
-      const all = [];
-      for (;;) {
-        const qs = form({
-          txt_subject: subject, txt_courseNumber: courseNumber, txt_term: term,
-          startDatepicker: '', endDatepicker: '', uniqueSessionId,
-          pageOffset: all.length, pageMaxSize: PAGE_SIZE,
-          sortColumn: 'subjectDescription', sortDirection: 'asc',
-        });
-        const res = await request('/searchResults/searchResults?' + qs);
-        const data = (res && res.data) || [];
-        all.push(...data);
-        const total = (res && res.totalCount) || 0;
-        if (!data.length || all.length >= total) break;
+      if (wrongTerm(all)) {
+        await selectTerm();
+        all = await runSearch();
       }
       return all;
     });
@@ -324,7 +342,7 @@
 
       if (!models.length) {
         messages.push('No sections could be added, so the plan was not saved.');
-        return { ok: false, messages, failedCrns };
+        return { ok: false, saved: false, messages, failedCrns };
       }
 
       say('Saving plan…');
@@ -335,10 +353,10 @@
       });
       if (!res || !res.success) {
         messages.push(formatMessage(res && res.message) || 'Banner rejected the plan.');
-        return { ok: false, messages, failedCrns };
+        return { ok: false, saved: false, messages, failedCrns };
       }
       say('Plan saved.');
-      return { ok: failedCrns.length === 0, messages, failedCrns };
+      return { ok: failedCrns.length === 0, saved: true, messages, failedCrns };
     });
   }
 

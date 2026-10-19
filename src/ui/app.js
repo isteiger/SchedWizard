@@ -99,7 +99,16 @@
   function primaryOfKey(key) { return cleanProfName(String(key || '').split(' / ')[0]); }
   function rmpColor(r) { return r >= 4.0 ? '#2E7D32' : r >= 3.0 ? '#C98A00' : '#B3261E'; }
   function monthYear(d) {
-    const t = d ? new Date(String(d).replace(' ', 'T')) : null;
+    let t = null;
+    if (d) {
+      // RMP dates look like "2024-03-15 18:22:41 +0000 UTC".
+      const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)(?:\.\d+)?\s*(Z|UTC|[+-]\d{2}:?\d{2})?/.exec(String(d).trim());
+      if (m) {
+        const tz = m[3] ? (/^[+-]/.test(m[3]) ? m[3].replace(/^([+-]\d{2}):?(\d{2})$/, '$1:$2') : 'Z') : '';
+        t = new Date(m[1] + 'T' + m[2] + (m[2].length === 5 ? ':00' : '') + tz);
+      }
+      if (!t || isNaN(t.getTime())) t = new Date(String(d));
+    }
     if (!t || isNaN(t.getTime())) return null;
     return ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][t.getMonth()] + ' ' + t.getFullYear();
   }
@@ -134,7 +143,8 @@
   }
   function modTag(sec) {
     const m = modalityOf(sec);
-    return h('span', { class: 'mod-tag ' + m }, MOD_LABELS[m]);
+    const tba = m === 'inperson' && SW.solver && SW.solver.isTba && SW.solver.isTba(sec);
+    return h('span', { class: 'mod-tag ' + m }, tba ? 'In person (TBA)' : MOD_LABELS[m]);
   }
   function isFull(sec) { return !(sec.seats > 0); }
   function errMsg(e) { return (e && e.message) || String(e || 'Unknown error'); }
@@ -158,6 +168,7 @@
       options: defaultOptions(),
       deselected: {},         // crn -> true
       locks: {},              // courseKey -> {section, crns[]} (typed "locked to one section")
+      dismissedPairs: {},     // companion course key -> true (lab/lecture suggestion dismissed; per term)
       byTerm: {},             // term -> saved snapshot (persisted)
       plans: { term: null, status: 'idle', list: [], max: 5, error: '' },  // existing Banner plans
       plansOpen: true,
@@ -192,7 +203,7 @@
 
     // ---- persistence
     function snapshot() {
-      return { courses: S.courses.slice(), breaks: S.breaks, options: S.options, deselected: S.deselected, locks: S.locks };
+      return { courses: S.courses.slice(), breaks: S.breaks, options: S.options, deselected: S.deselected, locks: S.locks, dismissedPairs: S.dismissedPairs };
     }
     function save() {
       try {
@@ -220,6 +231,7 @@
       S.options = Object.assign(defaultOptions(), snap.options || {});
       S.deselected = snap.deselected && typeof snap.deselected === 'object' ? snap.deselected : {};
       S.locks = snap.locks && typeof snap.locks === 'object' ? snap.locks : {};
+      S.dismissedPairs = snap.dismissedPairs && typeof snap.dismissedPairs === 'object' ? snap.dismissedPairs : {};
       S.result = null; S.selIdx = 0; S.planView = null;
     }
     // any input-affecting change
@@ -254,6 +266,22 @@
         S.cache[id] = { status: 'error', sections: [], title: '', error: errMsg(e) };
       }
       if (S.term === term) { S.result = null; render(); if (!batching) requestRmp(); }
+      // Look up the lecture/lab companion (cache only; never added to the course list automatically).
+      const comp = companionKey(key);
+      const c = S.cache[id];
+      if (comp && c && c.status === 'ok' && S.term === term && S.courses.indexOf(key) >= 0 && S.courses.indexOf(comp) < 0
+        && !S.dismissedPairs[comp] && !S.cache[ck(term, comp)]) fetchCourse(comp);
+    }
+    // "CHEM 1251" <-> "CHEM 1251L"
+    function companionKey(key) {
+      const m = /^([A-Z]+ \d{3,4})(L?)$/.exec(String(key || ''));
+      return m ? (m[2] ? m[1] : m[1] + 'L') : null;
+    }
+    function companionSuggestion(key) {
+      const comp = companionKey(key);
+      if (!comp || S.courses.indexOf(comp) >= 0 || S.dismissedPairs[comp]) return null;
+      const c = info(comp);
+      return c && c.status === 'ok' && c.sections.length ? comp : null;
     }
     let batching = false;
     async function fetchAllCourses() {
@@ -347,7 +375,9 @@
     function applyLock(key, matches) {
       const i = info(key);
       if (!i || i.status !== 'ok') return;
-      i.sections.forEach((s) => { if (matches.indexOf(s) >= 0) delete S.deselected[s.crn]; else S.deselected[s.crn] = true; });
+      // Only other sections of the same schedule type are deselected; other components (labs etc.) stay as they are.
+      const types = matches.map((s) => s.scheduleType);
+      i.sections.forEach((s) => { if (matches.indexOf(s) >= 0) delete S.deselected[s.crn]; else if (types.indexOf(s.scheduleType) >= 0) S.deselected[s.crn] = true; });
       S.locks[key] = { section: matches[0].section, crns: matches.map((s) => s.crn) };
       changed(); render();
     }
@@ -379,7 +409,9 @@
     function activeLock(key) {
       const L = S.locks[key];
       if (!L || !Array.isArray(L.crns)) return null;
-      const sel = selectedSections(key).map((s) => s.crn);
+      const i = info(key);
+      const types = i && i.status === 'ok' ? i.sections.filter((s) => L.crns.indexOf(s.crn) >= 0).map((s) => s.scheduleType) : [];
+      const sel = selectedSections(key).filter((s) => types.indexOf(s.scheduleType) >= 0).map((s) => s.crn);
       return sel.length === L.crns.length && L.crns.every((c) => sel.indexOf(c) >= 0) ? L : null;
     }
     function unlock(key) {
@@ -730,7 +762,9 @@
         else if (i.status === 'error') detail = h('span', { class: 'err' }, i.error);
         else detail = h('span', { class: 'chip-detail' }, [i.title, ' · ', i.sections.length + (i.sections.length === 1 ? ' section' : ' sections')]);
         const lk = activeLock(key);
-        return h('div', { class: 'chip ' + i.status },
+        const sug = companionSuggestion(key);
+        const isLab = /L$/.test(key);
+        const chip = h('div', { class: 'chip ' + i.status },
           i.status === 'loading' ? h('span', { class: 'spinner' }) : h('span', { class: 'chip-dot' }),
           h('span', { class: 'chip-key' }, key), detail,
           lk ? h('span', { class: 'lock-tag', title: 'Only section ' + lk.section + ' is selected' },
@@ -738,6 +772,12 @@
             h('button', { type: 'button', title: 'Unlock (select all sections again)', 'aria-label': 'Unlock ' + key, onclick: () => unlock(key) }, '×')) : null,
           i.status === 'error' ? h('button', { class: 'link-btn', type: 'button', onclick: () => { delete S.cache[ck(S.term, key)]; fetchCourse(key); } }, 'Retry') : null,
           h('button', { class: 'chip-x', type: 'button', title: 'Remove ' + key, 'aria-label': 'Remove ' + key, onclick: () => removeCourse(key) }, '×'));
+        if (!sug) return chip;
+        return h('div', { class: 'chip-wrap' }, chip,
+          h('div', { class: 'banner info block' },
+            '💡 ' + sug + (isLab ? ' (lecture)' : ' (lab)') + ' is usually taken with this ',
+            h('button', { class: 'btn small', type: 'button', onclick: () => addCourses(sug) }, 'Add'),
+            h('button', { class: 'chip-x', type: 'button', title: 'Dismiss', 'aria-label': 'Dismiss ' + sug, onclick: () => { S.dismissedPairs[sug] = true; save(); render(); } }, '×')));
       });
       return h('section', { class: 'card' },
         h('h2', null, 'Add your courses'),
@@ -876,7 +916,7 @@
             h('div', { class: 'row wrap acc-tools' },
               h('button', { class: 'btn small', type: 'button', onclick: () => setSections(ci.sections, true) }, 'Select all'),
               h('button', { class: 'btn small', type: 'button', onclick: () => setSections(ci.sections, false) }, 'Select none'),
-              h('button', { class: 'btn small', type: 'button', onclick: () => { ci.sections.forEach((s) => { if (isFull(s)) S.deselected[s.crn] = true; else delete S.deselected[s.crn]; }); changed(); render(); } }, 'Skip full'),
+              h('button', { class: 'btn small', type: 'button', onclick: () => { ci.sections.forEach((s) => { if (isFull(s)) S.deselected[s.crn] = true; }); changed(); render(); } }, 'Skip full'),
               h('label', { class: 'check small push-right' },
                 h('input', { type: 'checkbox', checked: S.sortProfs, onchange: (e) => { S.sortProfs = e.target.checked; render(); } }),
                 h('span', null, 'Sort profs by rating'))),
@@ -929,6 +969,7 @@
       const mode = o.modality || 'any';
       const courses = loadedCourses().map(({ key }) => ({
         key,
+        allSections: (info(key) && info(key).sections) || [],
         sections: selectedSections(key).filter((sec) => {
           const r = ratingOf(primaryProf(sec));
           sec.profRating = r;
@@ -1146,7 +1187,7 @@
     function openModal(sch) {
       const n = S.selIdx + 1;
       const name = ('Wizard – ' + termDesc(S.term) + ' #' + n).slice(0, 30);
-      S.modal = { sch, name, running: false, lines: [], done: false, ok: false, messages: [], failed: [] };
+      S.modal = { sch, name, running: false, lines: [], done: false, ok: false, saved: false, messages: [], failed: [] };
       render();
     }
     function runApply() {
@@ -1158,13 +1199,13 @@
       const crns = m.sch.sections.map((s) => s.crn);
       const push = (msg) => { m.lines.push(msg); renderModalLog(); };
       Promise.resolve().then(() => SW.api.applyPlan(S.term, crns, name, push)).then((res) => {
-        m.running = false; m.done = true; m.ok = !!(res && res.ok);
+        m.running = false; m.done = true; m.ok = !!(res && res.ok); m.saved = !!(res && res.saved);
         m.messages = (res && res.messages) || []; m.failed = (res && res.failedCrns) || [];
         render();
         loadPlans();
       }, (e) => {
         handleApiError(e);
-        m.running = false; m.done = true; m.ok = false; m.messages = [errMsg(e)]; m.failed = [];
+        m.running = false; m.done = true; m.ok = false; m.saved = false; m.messages = [errMsg(e)]; m.failed = [];
         render();
         loadPlans();
       });
@@ -1182,7 +1223,7 @@
       let body;
       if (m.done) {
         body = h('div', null,
-          h('div', { class: 'm-result ' + (m.ok ? 'ok' : 'bad') }, m.ok ? '✓ Plan saved' + (m.failed.length ? ' (some sections could not be added)' : '') : '✕ Could not save the plan'),
+          h('div', { class: 'm-result ' + (m.saved ? 'ok' : 'bad') }, m.saved ? '✓ Plan saved' + (m.failed.length ? ' (' + m.failed.length + (m.failed.length === 1 ? ' section' : ' sections') + ' could not be added)' : '') : '✕ Could not save the plan'),
           m.failed.length ? h('p', { class: 'err' }, 'Failed CRNs: ' + m.failed.join(', ')) : null,
           m.messages.length ? h('ul', { class: 'm-msgs' }, m.messages.map((x) => h('li', null, x))) : null,
           m.lines.length ? h('div', { class: 'm-log' }, m.lines.map((l) => h('div', null, l))) : null);
@@ -1203,7 +1244,7 @@
       }
       const footer = m.done
         ? h('div', { class: 'row end' },
-          m.ok ? h('button', { class: 'btn gold', type: 'button', onclick: () => { location.href = PLANS_URL; } }, 'View my plans') : null,
+          m.saved ? h('button', { class: 'btn gold', type: 'button', onclick: () => { location.href = PLANS_URL; } }, 'View my plans') : null,
           h('button', { class: 'btn', type: 'button', onclick: () => { S.modal = null; render(); } }, 'Close'))
         : h('div', { class: 'row end' },
           h('button', { class: 'btn', type: 'button', disabled: m.running, onclick: () => { S.modal = null; render(); } }, 'Cancel'),

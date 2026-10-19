@@ -1,7 +1,7 @@
 // SW.solver — pure schedule generator (no DOM). Works on NormSection objects from SW.api.normalizeSection.
 (function (root) {
   const SW = (root.SW = root.SW || {});
-  const HARD_CAP = 50000;
+  const HARD_CAP = 200000;
   const SLOT = 5; // minutes per bitmask slot
   const SLOTS_PER_DAY = 288;
 
@@ -26,12 +26,22 @@
   const HYBRID_RE = /hybrid|blended/i;
   const ONLINE_RE = /online|distance|remote/i;
   function isHybrid(sec) { return !!sec && HYBRID_RE.test(sec.method || ''); }
-  // Online = flagged online (no meeting times) or an online/distance/remote method, and not hybrid.
+  // No timed meetings (flagged online by the API, or simply no meetings).
+  function hasNoTimes(sec) { return !!sec && (!!sec.online || !sec.meetings || !sec.meetings.length); }
+  // Online = an online/distance/remote method, or no timed meetings with an empty/unknown method; never hybrid.
   function isOnline(sec) {
     if (!sec || isHybrid(sec)) return false;
-    return !!sec.online || ONLINE_RE.test(sec.method || '');
+    const method = String(sec.method || '').trim();
+    if (ONLINE_RE.test(method)) return true;
+    return hasNoTimes(sec) && !method;
   }
-  // 'online' | 'hybrid' | 'inperson'
+  // TBA = no timed meetings but a non-online delivery method (e.g. Face-to-Face with times still to be announced).
+  function isTba(sec) {
+    if (!sec || isHybrid(sec) || !hasNoTimes(sec)) return false;
+    const method = String(sec.method || '').trim();
+    return !!method && !ONLINE_RE.test(method);
+  }
+  // 'online' | 'hybrid' | 'inperson' (TBA-time non-online sections count as in person)
   function modalityOf(sec) { return isHybrid(sec) ? 'hybrid' : isOnline(sec) ? 'online' : 'inperson'; }
   // 1000 per non-preferred section, 500 per hybrid.
   function modalityPenalty(sections, modality) {
@@ -107,10 +117,12 @@
 
   // Split a course's eligible sections into required components.
   // One component normally; one per scheduleType when several types exist and none is "Lecture/Lab".
+  // Required types come from course.allSections (every loaded section, selected or not) when given.
   function buildComponents(course, eligible) {
     const types = [...new Set(eligible.map((s) => s.scheduleType))];
-    const combined = course.sections.some((s) => /lecture\s*\/\s*lab/i.test(s.scheduleType));
-    const allTypes = new Set(course.sections.map((s) => s.scheduleType));
+    const full = course.allSections || course.sections;
+    const combined = full.some((s) => /lecture\s*\/\s*lab/i.test(s.scheduleType));
+    const allTypes = new Set(full.map((s) => s.scheduleType));
     if (allTypes.size <= 1 || combined) return [eligible];
     // Component per type found in the full list so a missing type surfaces as "no sections fit".
     const comps = [...allTypes].map((t) => eligible.filter((s) => s.scheduleType === t));
@@ -203,6 +215,20 @@
 
   // ---------- generate ----------
 
+  function better(a, b) { return a.score < b.score || (a.score === b.score && a.compact < b.compact); }
+
+  // Per-section heuristic (lower = tried first) approximating the chosen sort.
+  function candidateKeyFn(sort) {
+    const ext = (sec, f, init) => sec.meetings.reduce((a, m) => f(a, m), init);
+    switch (sort) {
+      case 'bestProfs': return (s) => -(typeof s.profRating === 'number' && isFinite(s.profRating) ? s.profRating : 3.0);
+      case 'mostSeats': return (s) => -s.seats;
+      case 'latestStart': return (s) => (s.meetings.length ? -ext(s, (a, m) => Math.min(a, m.start), Infinity) : 0);
+      case 'earliestEnd': return (s) => (s.meetings.length ? ext(s, (a, m) => Math.max(a, m.end), -Infinity) : 0);
+      default: return (s) => new Set([].concat(...s.meetings.map((m) => m.days))).size;
+    }
+  }
+
   function generate(input) {
     const courses = (input && input.courses) || [];
     const breaks = (input && input.breaks) || [];
@@ -218,8 +244,15 @@
     courses.forEach((course, ci) => {
       const eligible = course.sections.filter((s) => (opts.allowFull || s.seats > 0) && sectionFits(s, breaks, opts));
       const comps = buildComponents(course, eligible);
-      if (!eligible.length || comps.some((c) => !c.length)) {
+      if (!eligible.length) {
         errors.push(`No sections of ${course.key} fit your constraints`);
+        return;
+      }
+      const missing = comps.findIndex((c) => !c.length);
+      if (missing >= 0) {
+        const full = course.allSections || course.sections;
+        const allTypes = [...new Set(full.map((x) => x.scheduleType))];
+        errors.push(`No ${allTypes[missing] || ''} sections of ${course.key} selected/fit your constraints`.replace('No  ', 'No '));
         return;
       }
       comps.forEach((cands, k) => {
@@ -235,7 +268,16 @@
     slots.forEach((s, i) => { s.outPos = i; });
     const order = slots.slice().sort((a, b) => a.cands.length - b.cands.length);
 
-    const found = [];
+    // Order each slot's candidates by a cheap heuristic matching the sort so the capped search sees good schedules first.
+    const candKey = candidateKeyFn(opts.sort);
+    order.forEach((slot) => {
+      slot.cands.forEach((c) => { c.key = candKey(c.sec); });
+      slot.cands.sort((a, b) => a.key - b.key); // stable
+    });
+
+    const top = []; // best K by (score, compact), ascending
+    const K = Math.max(0, opts.maxResults);
+    let total = 0;
     let truncated = false;
     const picked = new Array(order.length);
     const occ0 = [0n, 0n, 0n, 0n, 0n, 0n, 0n];
@@ -243,10 +285,18 @@
     function dfs(depth, occ) {
       if (truncated) return;
       if (depth === order.length) {
-        if (found.length >= cap) { truncated = true; return; }
+        if (total >= cap) { truncated = true; return; }
+        total++;
         const secs = new Array(order.length);
         for (let i = 0; i < order.length; i++) secs[order[i].outPos] = picked[i].sec;
-        found.push(secs);
+        const sc = scoreSchedule(secs, opts.sort, opts.modality);
+        if (top.length < K || better(sc, top[top.length - 1])) {
+          // Insert after any equal entries (keeps enumeration order on ties).
+          let lo = 0, hi = top.length;
+          while (lo < hi) { const mid = (lo + hi) >> 1; if (better(sc, top[mid])) hi = mid; else lo = mid + 1; }
+          top.splice(lo, 0, sc);
+          if (top.length > K) top.pop();
+        }
         return;
       }
       const slot = order[depth];
@@ -274,12 +324,10 @@
 
     dfs(0, occ0);
 
-    const scored = found.map((secs) => scoreSchedule(secs, opts.sort, opts.modality));
-    scored.sort((a, b) => a.score - b.score || a.compact - b.compact);
-    const top = scored.slice(0, opts.maxResults).map(({ sections, score, stats }) => ({ sections, score, stats }));
-    return { schedules: top, total: found.length, truncated, errors: [] };
+    const schedules = top.map(({ sections, score, stats }) => ({ sections, score, stats }));
+    return { schedules, total, truncated, errors: [] };
   }
 
-  SW.solver = { isOnline, isHybrid, modalityOf, modalityPenalty, generate, conflicts, sectionFits, scoreSchedule, buildComponents, minutesToLabel, daysToLabel };
+  SW.solver = { isOnline, isHybrid, isTba, modalityOf, modalityPenalty, generate, conflicts, sectionFits, scoreSchedule, buildComponents, minutesToLabel, daysToLabel };
   if (typeof module !== 'undefined' && module.exports) module.exports = SW.solver;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

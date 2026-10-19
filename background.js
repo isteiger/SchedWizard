@@ -2,7 +2,9 @@
 const BASE = 'https://selfservice.uncc.edu/StudentRegistrationSsb/';
 const START = BASE + 'ssb/term/termSelection?mode=plan';
 
-chrome.action.onClicked.addListener(async (tab) => {
+const hasChrome = typeof chrome !== 'undefined' && !!chrome.action;
+
+if (hasChrome) chrome.action.onClicked.addListener(async (tab) => {
   const onSite = !!(tab && tab.url && tab.url.startsWith(BASE));
   if (onSite) {
     try {
@@ -55,7 +57,7 @@ function rmpMatches(banner, node) {
   const pre = (a, c) => a.length >= 3 && c.length >= 3 ? a.slice(0, 3) === c.slice(0, 3) : a === c && !!a;
   const firstOk = pre(b.first, rfirst);
   if (b.last === rl && firstOk) return true;
-  if (rl.includes(b.last) && firstOk) return true;
+  if (rl.split(' ').includes(b.last) && firstOk) return true; // compound/hyphenated surnames (whole token)
   return false;
 }
 
@@ -73,6 +75,7 @@ async function rmpSearch(text) {
   if (resp.status === 401 || resp.status === 403) resp = await rmpFetch(text, true);
   if (!resp.ok) throw new Error('RMP HTTP ' + resp.status);
   const json = await resp.json();
+  if (!json || json.errors || !json.data || !json.data.newSearch) throw new Error('RMP bad response');
   const edges = json && json.data && json.data.newSearch && json.data.newSearch.teachers && json.data.newSearch.teachers.edges;
   return (edges || []).map((e) => e && e.node).filter(Boolean);
 }
@@ -95,12 +98,17 @@ async function rmpLookup(name) {
   const aliased = RMP_ALIASES_NORM[rmpNorm(name)] || name;
   const { last } = rmpSplit(aliased);
   if (!last) return null;
-  const nodes = await rmpSearch(last);
-  let best = null;
-  for (const n of nodes) {
-    if (!rmpMatches(aliased, n)) continue;
-    if (!best || (Number(n.numRatings) || 0) > (Number(best.numRatings) || 0)) best = n;
-  }
+  const pick = (nodes) => {
+    let b = null;
+    for (const n of nodes) {
+      if (!rmpMatches(aliased, n)) continue;
+      if (!b || (Number(n.numRatings) || 0) > (Number(b.numRatings) || 0)) b = n;
+    }
+    return b;
+  };
+  // Full normalized name first; fall back to the last name alone.
+  let best = pick(await rmpSearch(rmpNorm(aliased)));
+  if (!best) best = pick(await rmpSearch(last));
   if (!best || !(Number(best.numRatings) > 0)) return null;
   return rmpInfo(best);
 }
@@ -154,8 +162,10 @@ async function rmpGetMany(names) {
   return results;
 }
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+if (hasChrome) chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.type !== 'SW_RMP') return false;
   rmpGetMany(msg.names).then((results) => sendResponse({ results }), () => sendResponse({ results: {} }));
   return true;
 });
+
+if (typeof module !== 'undefined' && module.exports) module.exports = { rmpNorm, rmpSplit, rmpMatches };

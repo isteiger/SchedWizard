@@ -320,3 +320,5 @@ input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--green); cu
 .lock-tag button { border: 0; background: transparent; color: var(--green-dark); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 4px; border-radius: 50%; }
 .lock-tag button:hover { background: #fbe9e7; color: var(--danger); }
 .only-btn { padding: 3px 8px; font-size: 11px; }
+.banner.info.block { display: block; margin: 4px 0 0; padding: 6px 12px; background: #EEF6FF; color: #1d4e89; border-radius: var(--radius); font-weight: 500; font-size: 13px; }
+.banner.info.block .btn, .banner.info.block .chip-x { margin-left: 8px; }

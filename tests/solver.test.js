@@ -122,11 +122,11 @@ test('maxResults limits output but total counts all', () => {
   assert.strictEqual(r.total, 5);
 });
 
-test('truncation at hard cap of 50,000', () => {
+test('truncation at hard cap of 200,000', () => {
   const online = (k) => course(k, Array.from({ length: 15 }, () => sec(k, [])));
-  const r = gen([online('A 1'), online('B 1'), online('C 1'), online('D 1')], { maxResults: 10 }); // 15^4 = 50,625
+  const r = gen([online('A 1'), online('B 1'), online('C 1'), online('D 1'), online('E 1')], { maxResults: 10 }); // 15^5 = 759,375
   assert.strictEqual(r.truncated, true);
-  assert.strictEqual(r.total, 50000);
+  assert.strictEqual(r.total, 200000);
   assert.strictEqual(r.schedules.length, 10);
   const small = gen([online('A 1'), online('B 1')]);
   assert.strictEqual(small.truncated, false);
@@ -248,6 +248,55 @@ test('modality preference: preferOnline / preferInPerson rank first, then sort w
   assert.strictEqual(gen([course('A 1', [inp, onl])], {}).total, 2);
   const r = gen([course('A 1', [inp]), course('B 1', [onl])], { modality: 'preferOnline' });
   assert.strictEqual(r.schedules[0].stats.onlineCount, 1);
+});
+
+test('bounded best-K keeps the true best even when it is enumerated last', () => {
+  // All candidates tie on the heuristic key (same day count); the tightest pairing is the last one enumerated.
+  const a = [900, 840, 780, 720, 660].map((st) => sec('A 1', [mt([1], st, st + 50)]));
+  const b = sec('B 1', [mt([1], 600, 650)]);
+  const r = gen([course('A 1', a), course('B 1', [b])], { maxResults: 1 });
+  assert.strictEqual(r.total, 5);
+  assert.strictEqual(r.schedules.length, 1);
+  assert.strictEqual(r.schedules[0].sections[0], a[4], 'smallest gap wins');
+  const r2 = gen([course('A 1', a), course('B 1', [b])], { maxResults: 2 });
+  assert.deepStrictEqual(r2.schedules.map((s) => s.sections[0]), [a[4], a[3]]);
+});
+
+test('candidate ordering lets a capped search still find the best schedules', () => {
+  const a = Array.from({ length: 10 }, (_, i) => sec('A 1', [mt([1], 600, 650)], { seats: i + 1 })); // best seats last
+  const b = sec('B 1', [mt([2], 600, 650)], { seats: 10 });
+  const r = solver.generate({ courses: [course('A 1', a), course('B 1', [b])], breaks: [], options: { sort: 'mostSeats', hardCap: 3, maxResults: 1 } });
+  assert.strictEqual(r.truncated, true);
+  assert.strictEqual(r.total, 3);
+  assert.strictEqual(r.schedules[0].sections[0].seats, 10);
+});
+
+test('TBA-time Face-to-Face is in person, not online; empty method stays online', () => {
+  const tba = sec('A 1', [], { method: 'Face-to-Face Instruction' });
+  assert.strictEqual(solver.isOnline(tba), false);
+  assert.strictEqual(solver.isTba(tba), true);
+  assert.strictEqual(solver.modalityOf(tba), 'inperson');
+  assert.strictEqual(solver.isOnline(sec('A 1', [], { method: '' })), true);
+  assert.strictEqual(solver.isTba(sec('A 1', [], { method: '' })), false);
+  assert.strictEqual(solver.isOnline(sec('A 1', [], { method: 'Online Asynchronous' })), true);
+  assert.strictEqual(solver.isTba(sec('A 1', [mt([1], 600, 650)])), false);
+  const onl = sec('A 1', [], { method: 'Online Asynchronous' });
+  const r = gen([course('A 1', [tba, onl])], { modality: 'preferOnline' });
+  assert.strictEqual(r.schedules[0].sections[0], onl);
+});
+
+test('missing component is reported using allSections (unselected types count)', () => {
+  const lec = sec('C 1', [mt([1], 600, 660)], { scheduleType: 'Lecture' });
+  const lab = sec('C 1', [mt([2], 600, 700)], { scheduleType: 'Laboratory' });
+  const bad = gen([{ key: 'C 1', sections: [lec], allSections: [lec, lab] }]);
+  assert.strictEqual(bad.total, 0);
+  assert.strictEqual(bad.errors.length, 1);
+  assert.match(bad.errors[0], /No Laboratory sections of C 1/);
+  const ok = gen([{ key: 'C 1', sections: [lec, lab], allSections: [lec, lab] }]);
+  assert.strictEqual(ok.total, 1);
+  const combined = sec('C 1', [mt([1], 600, 660)], { scheduleType: 'Lecture/Lab' });
+  const lab2 = sec('C 1', [mt([2], 600, 700)], { scheduleType: 'Laboratory' });
+  assert.strictEqual(gen([{ key: 'C 1', sections: [combined], allSections: [combined, lab2] }]).total, 1, 'combined type exempt');
 });
 
 // ---------- runner ----------
