@@ -1,5 +1,6 @@
 # Niner Schedule Wizard — Chrome Extension Spec
 
+Lowkey vibecoded with Claude lol
 Rebuild of UNC Charlotte's retired schedule wizard as a Chrome MV3 extension that runs on
 `https://selfservice.uncc.edu/StudentRegistrationSsb/*` (Ellucian Banner 9 Self-Service Registration).
 

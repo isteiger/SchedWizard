@@ -801,7 +801,7 @@
           i.status === 'loading' ? h('span', { class: 'spinner' }) : h('span', { class: 'chip-dot' }),
           h('span', { class: 'chip-key' }, key), detail,
           S.autoLabs[key] && S.courses.indexOf(S.autoLabs[key]) >= 0
-            ? h('span', { class: 'lock-tag', title: 'Usually taken together. Remove × if you are taking it another semester.' }, 'Lab for ' + S.autoLabs[key] + ' · added automatically (usually taken together — remove × if you are taking it another semester)') : null,
+            ? h('span', { class: 'lock-tag', title: 'Added automatically because labs are usually taken with their lecture. Remove × if you are taking it another semester.' }, 'Lab for ' + S.autoLabs[key] + ' · auto-added') : null,
           lk ? h('span', { class: 'lock-tag', title: 'Only section ' + lk.section + ' is selected' },
             '\u{1F512} Sec ' + lk.section + ' only',
             h('button', { type: 'button', title: 'Unlock (select all sections again)', 'aria-label': 'Unlock ' + key, onclick: () => unlock(key) }, '×')) : null,
