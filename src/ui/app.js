@@ -250,7 +250,8 @@
       const term = S.term;
       const id = ck(term, key);
       const existing = S.cache[id];
-      if (existing && (existing.status === 'ok' || existing.status === 'loading')) return;
+      if (existing && existing.status === 'loading') return;
+      if (existing && existing.status === 'ok') { checkCompanion(key, term); return; }
       S.cache[id] = { status: 'loading', sections: [], title: '', error: '' };
       render();
       const [subj, num] = key.split(' ');
@@ -268,9 +269,12 @@
         S.cache[id] = { status: 'error', sections: [], title: '', error: errMsg(e) };
       }
       if (S.term === term) { S.result = null; render(); if (!batching) requestRmp(); }
-      // Look up the lecture/lab companion (cache only; never added to the course list automatically).
+      checkCompanion(key, term);
+    }
+    // Look up the lecture/lab companion; labs are auto-added (if enabled), lectures only suggested.
+    function checkCompanion(key, term) {
       const comp = companionKey(key);
-      const c = S.cache[id];
+      const c = S.cache[ck(term, key)];
       if (comp && c && c.status === 'ok' && S.term === term && S.courses.indexOf(key) >= 0 && S.courses.indexOf(comp) < 0
         && !S.dismissedPairs[comp]) {
         // Failures here must never affect the original course (fetchCourse records its own errors).
@@ -278,7 +282,8 @@
       }
     }
     async function companionLookup(key, comp, term) {
-      if (!S.cache[ck(term, comp)]) await fetchCourse(comp);
+      const prev = S.cache[ck(term, comp)];
+      if (!prev || prev.status === 'error') { delete S.cache[ck(term, comp)]; await fetchCourse(comp); }
       const c = S.cache[ck(term, comp)];
       const isLab = /L$/.test(comp);
       if (S.term !== term || !c || c.status !== 'ok' || !c.sections.length) { render(); return; }
@@ -751,7 +756,12 @@
           if (lockCrn(pi.crn)) crnLocked = true; else noCrn.push(pi.crn);
           return;
         }
-        if (S.courses.indexOf(pi.key) < 0) { S.courses.push(pi.key); added++; }
+        if (S.courses.indexOf(pi.key) < 0) {
+          S.courses.push(pi.key); added++;
+          // Explicitly adding a lecture again means the user wants its lab suggested again.
+          const comp = companionKey(pi.key);
+          if (comp && /L$/.test(comp)) delete S.dismissedPairs[comp];
+        }
         if (pi.section) lockJobs.push([pi.key, pi.section]);
       });
       S.courseInput = bad.concat(noCrn).join(', ');
@@ -766,7 +776,10 @@
       // Removing a lab (auto-added or not) means "don't re-add it for this term".
       if (/L$/.test(key) && companionKey(key)) S.dismissedPairs[key] = true;
       delete S.autoLabs[key];
-      S.courses = S.courses.filter((k) => k !== key);
+      // Removing a lecture also removes the lab that was auto-added for it.
+      const autoLab = Object.keys(S.autoLabs).find((lab) => S.autoLabs[lab] === key);
+      if (autoLab) delete S.autoLabs[autoLab];
+      S.courses = S.courses.filter((k) => k !== key && k !== autoLab);
       changed(); render();
     }
     function stepCourses() {
