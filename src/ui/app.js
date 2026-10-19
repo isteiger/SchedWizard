@@ -725,6 +725,8 @@
         h('span', { class: 'credit-sep' }, '·'),
         h('a', { href: 'https://ko-fi.com/isteiger', target: '_blank', rel: 'noopener' }, '☕ ko-fi.com/isteiger'),
         h('span', { class: 'credit-sep' }, '·'),
+        h('a', { href: 'https://github.com/isteiger/SchedWizard', target: '_blank', rel: 'noopener' }, 'GitHub'),
+        h('span', { class: 'credit-sep' }, '·'),
         h('span', null, 'v' + extVersion()));
     }
     function extVersion() {

@@ -11,6 +11,7 @@ Then save the one you like straight into Banner as a plan.
 ![Manifest V3](https://img.shields.io/badge/Manifest-V3-A49665)
 ![No build step](https://img.shields.io/badge/build-none-005035)
 ![Vanilla JS](https://img.shields.io/badge/vanilla-JS-A49665?logo=javascript&logoColor=white)
+![License: MIT](https://img.shields.io/badge/license-MIT-005035)
 
 [Features](#-features) · [Install](#-install) · [How to use](#-how-to-use) · [How it works](#-how-it-works) · [Development](#-development)
 
@@ -88,10 +89,11 @@ interferes with Banner's own page.
 
 > Not on the Chrome Web Store yet, so install it as an unpacked extension.
 
-1. Download this repo (**Code → Download ZIP** and unzip it, or `git clone` it).
+1. Download `niner-schedule-wizard-vX.Y.Z.zip` from the [latest release](https://github.com/isteiger/SchedWizard/releases/latest) and unzip it
+   (or `git clone https://github.com/isteiger/SchedWizard.git`).
 2. Open **`chrome://extensions`** in Chrome.
 3. Turn on **Developer mode** (top right).
-4. Click **Load unpacked** and select the project folder (the one containing `manifest.json`).
+4. Click **Load unpacked** and select the unzipped folder (the one containing `manifest.json`).
 5. Log in to the [UNC Charlotte registration portal](https://selfservice.uncc.edu/StudentRegistrationSsb/ssb/registration)
    and refresh the page. The **✨ Schedule Wizard** button appears in the bottom-right corner.
 
@@ -140,6 +142,7 @@ src/ui/app.js        the whole wizard UI
 src/ui/styles.css    Charlotte Green & Niner Gold theme
 tests/               node tests (no deps)
 tools/make-icons.js  generates the PNG icons
+tools/build.js       packages dist/*.zip for release
 ```
 
 Run the tests with Node 18+:
@@ -150,16 +153,32 @@ node tests/solver.test.js && node tests/plans.test.js && node tests/rmp.test.js
 
 After editing, reload the extension in `chrome://extensions` and refresh the Banner tab.
 
+### Build a release zip
+
+```bash
+node tools/build.js
+```
+
+This runs the tests, checks that every file the manifest references exists, syntax-checks the scripts, and writes
+`dist/niner-schedule-wizard-v<version>.zip`. That zip is what gets uploaded to the Chrome Web Store and attached to GitHub releases.
+Bump `version` in `manifest.json` before each release; the panel footer shows it automatically.
+
 ## ⚠️ Disclaimer
 
 This is an unofficial student project. It is not affiliated with or endorsed by UNC Charlotte, Ellucian, or RateMyProfessors.
 Always double-check your schedule in Banner before registering. Seat counts and ratings change constantly.
 
+See the [privacy policy](PRIVACY.md). The extension has no servers and does no tracking.
+
+## 📄 License
+
+[MIT](LICENSE) © Ian Steiger
+
 ---
 
 <div align="center">
 
-Created by **Ian Steiger** · ☕ [ko-fi.com/isteiger](https://ko-fi.com/isteiger)
+Created by **Ian Steiger** · ☕ [ko-fi.com/isteiger](https://ko-fi.com/isteiger) · [GitHub](https://github.com/isteiger/SchedWizard)
 
 Go Niners ⛏️
 
